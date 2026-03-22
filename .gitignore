@@ -15,6 +15,9 @@ build/
 memory/tasks.db
 memory/logs/*.log
 
+# Finance module runtime data (generated SQLite DBs)
+xclaw_finance/memory/
+
 # IDE
 .vscode/
 .idea/
