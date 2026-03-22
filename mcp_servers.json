@@ -1,0 +1,55 @@
+{
+  "_comment": "XClaw MCP Server Configuration. Remove this field before use.",
+  "_docs": "https://github.com/navigatorxm/X-Claw#mcp-servers",
+  "servers": [
+    {
+      "_comment": "Filesystem access — reads/writes files on your server",
+      "_enable": "remove this line to enable",
+      "name": "filesystem",
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp", "/home"],
+      "env": {}
+    },
+    {
+      "_comment": "Brave Search — web search with real results (needs BRAVE_API_KEY)",
+      "_enable": "remove this line to enable",
+      "name": "brave-search",
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+      "env": {
+        "BRAVE_API_KEY": "${BRAVE_API_KEY}"
+      }
+    },
+    {
+      "_comment": "Puppeteer — headless browser, take screenshots, scrape JS-heavy sites",
+      "_enable": "remove this line to enable",
+      "name": "puppeteer",
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
+      "env": {}
+    },
+    {
+      "_comment": "GitHub MCP — more GitHub ops via official MCP server",
+      "_enable": "remove this line to enable",
+      "name": "github",
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+      }
+    },
+    {
+      "_comment": "Postgres — query your database in natural language",
+      "_enable": "remove this line to enable",
+      "name": "postgres",
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres", "${DATABASE_URL}"],
+      "env": {}
+    }
+  ]
+}

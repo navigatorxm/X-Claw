@@ -136,7 +136,7 @@ Set your key(s) in `.env` — XClaw auto-detects which ones are available.
 ## 📁 Project Structure
 
 ```
-OpenClaw/
+XClaw/
 ├── main.py                     # Entry point — wires everything together
 ├── brain/
 │   ├── config.yaml             # LLM providers, model settings
@@ -243,7 +243,7 @@ The LLM automatically discovers and uses your tool.
 > "Find the top 5 Python async frameworks on GitHub, get their READMEs, and create a comparison report"
 
 **GitHub workflow:**
-> "List open issues on navigatorxm/OpenClaw and create an issue for the KB schema bug"
+> "List open issues on navigatorxm/XClaw and create an issue for the KB schema bug"
 
 **Market watch:**
 > "What's the current BTC price and top 5 crypto gainers today?"

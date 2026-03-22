@@ -149,6 +149,14 @@ class ToolRegistry:
     def tool_names(self) -> list[str]:
         return list(self._schemas.keys())
 
+    def unregister(self, name: str) -> bool:
+        """Remove a tool from the registry. Returns True if it existed."""
+        existed = name in self._schemas
+        self._schemas.pop(name, None)
+        self._handlers.pop(name, None)
+        self._bound_args.pop(name, None)
+        return existed
+
     def as_text_list(self) -> str:
         """Describe all tools in plain text (for prompt-based fallback)."""
         lines = []

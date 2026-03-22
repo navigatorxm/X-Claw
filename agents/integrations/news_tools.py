@@ -24,7 +24,7 @@ _HN_API = "https://hacker-news.firebaseio.com/v0"
 _WIKI_API = "https://en.wikipedia.org/api/rest_v1"
 _GEOCODE = "https://geocoding-api.open-meteo.com/v1/search"
 _WEATHER = "https://api.open-meteo.com/v1/forecast"
-_UA = "XClaw/3.0 (github.com/navigatorxm/OpenClaw)"
+_UA = "XClaw/3.0 (github.com/navigatorxm/XClaw)"
 
 
 async def get_hacker_news(category: str = "top", limit: int = 10) -> str:

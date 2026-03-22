@@ -1,11 +1,16 @@
 """
 XClaw v3 — entry point.
 
+First time setup:
+    bash scripts/setup.sh
+
 Usage:
-    python main.py                         # CLI
-    python main.py --interface web         # Web dashboard + API
-    python main.py --interface telegram    # Telegram bot
-    python main.py --interface web --port 8080
+    python main.py                              # Web dashboard (default)
+    python main.py --interface web              # Web dashboard + API
+    python main.py --interface telegram         # Telegram bot only
+    python main.py --interface all              # Web + Telegram simultaneously
+    python main.py --interface cli              # CLI (no web server)
+    python main.py --port 8080                  # Custom port
 """
 
 from __future__ import annotations
@@ -72,6 +77,8 @@ def _build_xclaw():
     from agents.research import ResearchAgent
     from agents.tasks import TasksAgent
     from agents.toolbox import ToolBox, register_toolbox
+    from agents.swarm import make_swarm_tool
+    from core.plugin_manager import PluginManager
 
     # ── Core services ──────────────────────────────────────────────────
     memory = Memory(db_path="memory/tasks.db", context_path="memory/context.md")
@@ -91,6 +98,15 @@ def _build_xclaw():
 
     toolbox = ToolBox(memory=memory, kb=kb, scheduler=scheduler_placeholder)
     register_toolbox(tools, toolbox)
+
+    # ── Agent Swarm ───────────────────────────────────────────────────
+    swarm_fn = make_swarm_tool(llm=llm, tools=tools, hub=hub)
+    tools.register(swarm_fn, description="Dispatch parallel AI agents to complete a complex task", name="swarm_task")
+
+    # ── Plugin Manager ────────────────────────────────────────────────
+    plugin_manager = PluginManager(memory=memory)
+    plugin_manager.scan()
+    plugin_manager.register_all(tools)
 
     # ── AgentLoop ─────────────────────────────────────────────────────
     agent_loop = AgentLoop(
@@ -131,7 +147,7 @@ def _build_xclaw():
 
     gateway = Gateway(handler=commander.handle)
 
-    return gateway, memory, router, llm, hub, telemetry, kb, tools, scheduler
+    return gateway, memory, router, llm, hub, telemetry, kb, tools, scheduler, plugin_manager
 
 
 def main() -> None:
@@ -140,23 +156,51 @@ def main() -> None:
     log = logging.getLogger(__name__)
 
     parser = argparse.ArgumentParser(description="XClaw v3 — NavOS AI Executive Assistant")
-    parser.add_argument("--interface", choices=["cli", "telegram", "web"], default="cli")
+    parser.add_argument("--interface", choices=["cli", "telegram", "web", "all"], default="web")
     parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--port", type=int, default=int(os.getenv("PORT", "8000")))
     args = parser.parse_args()
 
-    gateway, memory, router, llm, hub, telemetry, kb, tools, scheduler = _build_xclaw()
+    gateway, memory, router, llm, hub, telemetry, kb, tools, scheduler, plugin_manager = _build_xclaw()
 
     providers = llm.available_providers()
     log.info("XClaw v3 starting — interface: %s", args.interface)
     log.info("LLM providers: %s", providers or ["NONE — set at least one API key in .env"])
-    log.info("Tools registered: %d", len(tools.tool_names()))
+    log.info("Tools registered: %d (inc. %d plugin tools)", len(tools.tool_names()), sum(len(p.tools) for p in plugin_manager._plugins.values() if p.enabled and p.loaded))
+
+    if not providers:
+        print("\n" + "="*60)
+        print("  ⚠  No LLM providers configured!")
+        print("  Run:  bash scripts/setup.sh")
+        print("  Or:   edit .env and set at least one API key")
+        print("="*60 + "\n")
+
+    async def _boot_mcp():
+        """Load MCP servers if mcp_servers.json exists."""
+        try:
+            from core.mcp_client import load_mcp_servers
+            n = await load_mcp_servers(tools)
+            if n > 0:
+                log.info("MCP: loaded %d additional tools", n)
+        except Exception as exc:
+            log.warning("MCP boot failed: %s", exc)
+
+    def _make_web_app():
+        from interface.web.app import create_app
+        return create_app(
+            gateway, memory,
+            hub=hub,
+            llm_router=llm,
+            telemetry=telemetry,
+            kb=kb,
+            tools=tools,
+            plugin_manager=plugin_manager,
+        )
 
     if args.interface == "cli":
-        from interface.cli import run_cli
-        # Run scheduler in background alongside CLI
         async def _run_cli():
             asyncio.create_task(scheduler.run_forever())
+            await _boot_mcp()
             from interface.cli import CLIInterface
             cli = CLIInterface(gateway, memory, router)
             await cli.run()
@@ -165,35 +209,50 @@ def main() -> None:
     elif args.interface == "telegram":
         async def _run_telegram():
             asyncio.create_task(scheduler.run_forever())
+            await _boot_mcp()
             from interface.telegram import run_telegram
             run_telegram(gateway)
         asyncio.run(_run_telegram())
 
-    elif args.interface == "web":
+    elif args.interface in ("web", "all"):
         try:
             import uvicorn
         except ImportError:
             print("uvicorn not installed. Run: pip install uvicorn")
             sys.exit(1)
-        from interface.web.app import create_app
-        app = create_app(
-            gateway, memory,
-            hub=hub,
-            llm_router=llm,
-            telemetry=telemetry,
-            kb=kb,
-            tools=tools,
-        )
 
-        # Add scheduler startup to FastAPI lifespan
+        app = _make_web_app()
+
         from contextlib import asynccontextmanager
         @asynccontextmanager
         async def lifespan(application):
-            task = asyncio.create_task(scheduler.run_forever())
+            # Boot MCP servers
+            await _boot_mcp()
+            sched_task = asyncio.create_task(scheduler.run_forever())
+            # Start Telegram alongside web if --interface all
+            tg_task = None
+            if args.interface == "all":
+                tg_token = os.getenv("TELEGRAM_BOT_TOKEN")
+                if tg_token:
+                    try:
+                        from interface.telegram import run_telegram_async
+                        tg_task = asyncio.create_task(run_telegram_async(gateway))
+                        log.info("Telegram bot started alongside web interface")
+                    except Exception as exc:
+                        log.warning("Telegram failed to start: %s", exc)
+                else:
+                    log.warning("--interface all: TELEGRAM_BOT_TOKEN not set, skipping Telegram")
             yield
-            task.cancel()
+            sched_task.cancel()
+            if tg_task:
+                tg_task.cancel()
 
         app.router.lifespan_context = lifespan
+
+        print(f"\n  ⚡ XClaw v3 — Dashboard: http://{args.host}:{args.port}")
+        if args.interface == "all":
+            print(f"  🤖 Telegram bot: active")
+        print()
 
         uvicorn.run(app, host=args.host, port=args.port)
 

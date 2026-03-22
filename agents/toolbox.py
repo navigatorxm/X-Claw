@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING
 import httpx
 
 from core.tool_registry import ToolRegistry
-from agents.integrations import github_tools, news_tools, communication_tools
+from agents.integrations import github_tools, news_tools, communication_tools, gmail_tools
 
 if TYPE_CHECKING:
     from core.knowledge_base import KnowledgeBase
@@ -417,7 +417,7 @@ def register_toolbox(registry: ToolRegistry, toolbox: ToolBox) -> None:
         registry.register(fn, description=doc, name=name)
 
     # Register integration modules (standalone async functions)
-    _integration_modules = [github_tools, news_tools, communication_tools]
+    _integration_modules = [github_tools, news_tools, communication_tools, gmail_tools]
     for module in _integration_modules:
         for name in dir(module):
             if name.startswith("_"):
