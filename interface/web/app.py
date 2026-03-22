@@ -46,6 +46,7 @@ def create_app(
     telemetry: "Telemetry | None" = None,
     kb: "KnowledgeBase | None" = None,
     tools: "ToolRegistry | None" = None,
+    plugin_manager=None,
 ):
     try:
         from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
@@ -250,6 +251,36 @@ def create_app(
             "tools_count": len(tools.tool_names()) if tools else 0,
         })
 
+    # ── Plugin Manager API ─────────────────────────────────────────────
+
+    @app.get("/plugins")
+    async def list_plugins():
+        if not plugin_manager:
+            return JSONResponse([])
+        return JSONResponse(plugin_manager.list_plugins())
+
+    @app.post("/plugins/{name}/enable")
+    async def enable_plugin(name: str):
+        if not plugin_manager:
+            return JSONResponse({"error": "Plugin manager not configured"}, status_code=503)
+        ok = plugin_manager.set_enabled(name, True)
+        return JSONResponse({"ok": ok, "name": name, "enabled": True})
+
+    @app.post("/plugins/{name}/disable")
+    async def disable_plugin(name: str):
+        if not plugin_manager:
+            return JSONResponse({"error": "Plugin manager not configured"}, status_code=503)
+        ok = plugin_manager.set_enabled(name, False)
+        return JSONResponse({"ok": ok, "name": name, "enabled": False})
+
+    @app.post("/plugins/{name}/reload")
+    async def reload_plugin(name: str):
+        if not plugin_manager:
+            return JSONResponse({"error": "Plugin manager not configured"}, status_code=503)
+        ok = plugin_manager.reload(name)
+        p = plugin_manager.get_plugin(name)
+        return JSONResponse({"ok": ok, "plugin": p})
+
     @app.get("/nginx-config")
     async def nginx_config(domain: str, port: int = 8000):
         """Generate an nginx reverse-proxy config for the given domain."""
@@ -407,6 +438,42 @@ nav{display:flex;gap:2px;margin-left:.4rem}
 #settings-panel .pill.on{background:#14532d;color:var(--green)}.pill.off{background:#1f1f1f;color:#555}
 .nginx-cmd{background:#0a0a0a;border:1px solid var(--border);border-radius:4px;padding:.35rem .6rem;font-size:.73rem;font-family:monospace;color:#93c5fd;margin:.2rem 0;word-break:break-all;cursor:pointer}
 .nginx-cmd:hover{border-color:var(--blue)}
+/* ── Plugins ── */
+#plugins-panel{padding:.8rem 1rem;overflow-y:auto}
+.plugin-filters{display:flex;gap:.3rem;flex-wrap:wrap;margin-bottom:.75rem}
+.pf-btn{background:#111;border:1px solid var(--border2);color:var(--text-mid);padding:.2rem .55rem;border-radius:20px;cursor:pointer;font-size:.72rem;transition:all .15s}
+.pf-btn:hover,.pf-btn.active{background:#1e3a5f;border-color:var(--blue);color:#93c5fd}
+.plugin-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:.6rem;margin-bottom:1rem}
+.plugin-card{background:var(--bg3);border:1px solid var(--border2);border-radius:7px;padding:.65rem .8rem;transition:border-color .15s}
+.plugin-card:hover{border-color:#333}
+.plugin-card.disabled{opacity:.5}
+.plugin-card.error{border-color:#7f1d1d}
+.pc-head{display:flex;align-items:center;gap:.4rem;margin-bottom:.3rem}
+.pc-name{font-size:.85rem;font-weight:600;color:#ddd;flex:1}
+.pc-ver{font-size:.68rem;color:#444}
+.pc-toggle{position:relative;width:32px;height:18px;flex-shrink:0}
+.pc-toggle input{opacity:0;width:0;height:0}
+.pc-slider{position:absolute;cursor:pointer;inset:0;background:#222;border-radius:18px;transition:.2s}
+.pc-slider:before{content:"";position:absolute;height:12px;width:12px;left:3px;bottom:3px;background:#555;border-radius:50%;transition:.2s}
+input:checked+.pc-slider{background:#1d4ed8}
+input:checked+.pc-slider:before{transform:translateX(14px);background:#fff}
+.pc-desc{font-size:.77rem;color:var(--text-mid);margin-bottom:.3rem;line-height:1.5}
+.pc-tags{display:flex;flex-wrap:wrap;gap:.2rem;margin-top:.2rem}
+.pc-tag{font-size:.65rem;background:#111;border:1px solid var(--border);border-radius:2px;padding:.05rem .3rem;color:#444}
+.pc-err{font-size:.72rem;color:var(--red);margin-top:.2rem}
+.pc-tools{font-size:.68rem;color:#334;margin-top:.15rem}
+/* Integration marketplace */
+.integration-section{margin-top:1rem}
+.int-title{font-size:.67rem;text-transform:uppercase;letter-spacing:.5px;color:#333;margin-bottom:.5rem}
+.int-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:.5rem}
+.int-card{background:var(--bg3);border:1px solid var(--border2);border-radius:7px;padding:.6rem .75rem;cursor:pointer;transition:border-color .15s;display:flex;flex-direction:column;gap:.3rem}
+.int-card:hover{border-color:var(--blue)}
+.int-card.connected{border-color:#14532d}
+.int-icon{font-size:1.2rem}
+.int-name{font-size:.82rem;font-weight:600;color:#ccc}
+.int-desc{font-size:.72rem;color:var(--text-dim);line-height:1.4}
+.int-status{font-size:.68rem;font-weight:600;align-self:flex-start;padding:.1rem .35rem;border-radius:3px}
+.int-status.on{background:#14532d;color:var(--green)}.int-status.off{background:#1a1a1a;color:#555}
 
 </style>
 </head>
@@ -421,6 +488,7 @@ nav{display:flex;gap:2px;margin-left:.4rem}
     <button class="tab" data-tab="schedule">Schedule</button>
     <button class="tab" data-tab="metrics">Metrics</button>
     <button class="tab" data-tab="kb">Knowledge</button>
+    <button class="tab" data-tab="plugins">Plugins</button>
     <button class="tab" data-tab="settings">Settings</button>
   </nav>
   <div id="hdr-right">
@@ -514,6 +582,75 @@ nav{display:flex;gap:2px;margin-left:.4rem}
         <div id="kb-results"></div>
         <div style="font-size:.67rem;text-transform:uppercase;letter-spacing:.5px;color:#333;margin:.6rem 0 .3rem">Ingested Documents</div>
         <div id="kb-sources"><div class="section-empty">Knowledge base is empty.</div></div>
+      </div>
+    </div>
+
+    <!-- Plugins tab -->
+    <div class="panel-tab hidden" id="tab-plugins">
+      <div id="plugins-panel">
+        <div class="plugin-filters" id="plugin-filters">
+          <button class="pf-btn active" data-cat="all">All</button>
+          <button class="pf-btn" data-cat="research">Research</button>
+          <button class="pf-btn" data-cat="coding">Coding</button>
+          <button class="pf-btn" data-cat="writing">Writing</button>
+          <button class="pf-btn" data-cat="automation">Automation</button>
+          <button class="pf-btn" data-cat="productivity">Productivity</button>
+        </div>
+        <div class="plugin-grid" id="plugin-grid"></div>
+        <!-- Integration Marketplace -->
+        <div class="integration-section">
+          <div class="int-title">Integrations &amp; Access</div>
+          <div class="int-grid" id="int-grid">
+            <div class="int-card" onclick="openIntegration('stripe')">
+              <div class="int-icon">💳</div>
+              <div class="int-name">Payment Card</div>
+              <div class="int-desc">Stripe integration — let XClaw manage payments, invoices, subscriptions</div>
+              <div class="int-status off" id="int-stripe">Not connected</div>
+            </div>
+            <div class="int-card" onclick="openIntegration('metamask')">
+              <div class="int-icon">🦊</div>
+              <div class="int-name">MetaMask / ETH</div>
+              <div class="int-desc">Ethereum wallet — check balances, sign transactions, interact with DeFi</div>
+              <div class="int-status off" id="int-metamask">Not connected</div>
+            </div>
+            <div class="int-card" onclick="openIntegration('phantom')">
+              <div class="int-icon">👻</div>
+              <div class="int-name">Phantom / SOL</div>
+              <div class="int-desc">Solana wallet — SPL tokens, NFTs, Solana program interactions</div>
+              <div class="int-status off" id="int-phantom">Not connected</div>
+            </div>
+            <div class="int-card" onclick="openIntegration('github')">
+              <div class="int-icon">🐙</div>
+              <div class="int-name">GitHub</div>
+              <div class="int-desc">Repos, PRs, issues, Actions — XClaw codes and ships autonomously</div>
+              <div class="int-status off" id="int-github">Not connected</div>
+            </div>
+            <div class="int-card" onclick="openIntegration('telegram')">
+              <div class="int-icon">✈️</div>
+              <div class="int-name">Telegram Bot</div>
+              <div class="int-desc">Chat with XClaw from anywhere via Telegram</div>
+              <div class="int-status off" id="int-telegram">Not connected</div>
+            </div>
+            <div class="int-card" onclick="openIntegration('email')">
+              <div class="int-icon">📧</div>
+              <div class="int-name">Email Identity</div>
+              <div class="int-desc">Give XClaw its own Gmail — read, send, manage email autonomously</div>
+              <div class="int-status off" id="int-email">Not connected</div>
+            </div>
+            <div class="int-card" onclick="openIntegration('mcp')">
+              <div class="int-icon">🔌</div>
+              <div class="int-name">MCP Servers</div>
+              <div class="int-desc">Connect any Model Context Protocol server — filesystem, databases, APIs</div>
+              <div class="int-status off" id="int-mcp">Not connected</div>
+            </div>
+            <div class="int-card" onclick="openIntegration('swarm')">
+              <div class="int-icon">🐝</div>
+              <div class="int-name">Agent Swarm</div>
+              <div class="int-desc">Deploy a swarm of specialised sub-agents to parallelise complex tasks</div>
+              <div class="int-status off" id="int-swarm">Available</div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -627,6 +764,7 @@ document.querySelectorAll('.tab').forEach(btn => {
     if (currentTab === 'schedule') refreshSchedule();
     if (currentTab === 'metrics') refreshMetrics();
     if (currentTab === 'kb') refreshKBSources();
+    if (currentTab === 'plugins') refreshPlugins();
     if (currentTab === 'settings') refreshSettings();
   });
 });
@@ -958,6 +1096,90 @@ document.getElementById('nginx-gen-btn').addEventListener('click', async () => {
       ).join('');
   } catch {}
 });
+
+// ── Plugins ────────────────────────────────────────────────────────────────
+
+let pluginData = [];
+let activePluginCat = 'all';
+
+document.querySelectorAll('.pf-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    activePluginCat = btn.dataset.cat;
+    document.querySelectorAll('.pf-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    renderPlugins();
+  });
+});
+
+async function refreshPlugins() {
+  try {
+    pluginData = await (await fetch('/plugins')).json();
+    renderPlugins();
+    // Update integration statuses from settings
+    const s = await (await fetch('/settings')).json();
+    if (s.telegram_configured) setIntStatus('telegram', true, 'Connected');
+    if (s.github_configured) setIntStatus('github', true, 'Connected');
+    if (s.email_configured) setIntStatus('email', true, 'Connected');
+    if (s.mcp_configured) setIntStatus('mcp', true, 'Configured');
+    setIntStatus('swarm', true, 'Available');
+  } catch(e) { console.error(e); }
+}
+
+function setIntStatus(key, connected, label) {
+  const el = document.getElementById('int-' + key);
+  if (!el) return;
+  el.textContent = label;
+  el.className = 'int-status ' + (connected ? 'on' : 'off');
+  el.closest('.int-card').classList.toggle('connected', connected);
+}
+
+function renderPlugins() {
+  const grid = document.getElementById('plugin-grid');
+  const filtered = activePluginCat === 'all'
+    ? pluginData
+    : pluginData.filter(p => p.category === activePluginCat);
+  if (!filtered.length) {
+    grid.innerHTML = '<div class="section-empty">No plugins in this category.</div>';
+    return;
+  }
+  grid.innerHTML = filtered.map(p => `
+    <div class="plugin-card${p.enabled?'':' disabled'}${p.error?' error':''}" data-name="${esc(p.name)}">
+      <div class="pc-head">
+        <span class="pc-name">${esc(p.display_name)}</span>
+        <span class="pc-ver">v${esc(p.version)}</span>
+        <label class="pc-toggle" title="${p.enabled?'Disable':'Enable'} ${esc(p.name)}">
+          <input type="checkbox" ${p.enabled?'checked':''} onchange="togglePlugin('${esc(p.name)}',this.checked)">
+          <span class="pc-slider"></span>
+        </label>
+      </div>
+      <div class="pc-desc">${esc(p.description)}</div>
+      ${p.error ? `<div class="pc-err">⚠ ${esc(p.error)}</div>` : `<div class="pc-tools">${p.tool_count} tool${p.tool_count!==1?'s':''}: ${p.tool_names.slice(0,4).map(t=>esc(t)).join(', ')}${p.tool_count>4?'…':''}</div>`}
+      <div class="pc-tags">${(p.tags||[]).map(t=>`<span class="pc-tag">${esc(t)}</span>`).join('')}</div>
+    </div>`).join('');
+}
+
+async function togglePlugin(name, enabled) {
+  try {
+    const endpoint = enabled ? 'enable' : 'disable';
+    await fetch('/plugins/' + encodeURIComponent(name) + '/' + endpoint, {method:'POST'});
+    await refreshPlugins();
+  } catch(e) { console.error(e); }
+}
+
+function openIntegration(key) {
+  const msgs_map = {
+    stripe: 'To connect Stripe: add STRIPE_API_KEY to your .env file and restart XClaw. XClaw will then be able to process payments and manage subscriptions.',
+    metamask: 'To connect MetaMask: add ETHEREUM_RPC_URL and optionally WALLET_PRIVATE_KEY to .env. XClaw can then read balances and submit transactions.',
+    phantom: 'To connect Phantom/Solana: add SOLANA_RPC_URL and optionally SOLANA_KEYPAIR_PATH to .env for autonomous SOL interactions.',
+    github: 'GitHub is configured via GITHUB_TOKEN in .env. Run bash scripts/setup.sh to set it up interactively.',
+    telegram: 'Telegram is configured via TELEGRAM_BOT_TOKEN in .env. Run bash scripts/setup.sh to set it up.',
+    email: 'Email identity is configured via SMTP_USER, SMTP_PASSWORD, IMAP_HOST in .env. Run bash scripts/setup.sh.',
+    mcp: 'MCP servers are configured in mcp_servers.json. Edit the file and add your servers, then restart XClaw.',
+    swarm: 'Agent Swarm is built-in. Use /swarm <task> in chat to dispatch a swarm of agents to complete complex multi-step tasks in parallel.',
+  };
+  addMsg(msgs_map[key] || 'Configuration coming soon.', 'xclaw', false);
+  document.querySelector('[data-tab="chat"]').click();
+}
 
 // ── Init ───────────────────────────────────────────────────────────────────
 

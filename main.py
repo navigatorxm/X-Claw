@@ -77,6 +77,8 @@ def _build_xclaw():
     from agents.research import ResearchAgent
     from agents.tasks import TasksAgent
     from agents.toolbox import ToolBox, register_toolbox
+    from agents.swarm import make_swarm_tool
+    from core.plugin_manager import PluginManager
 
     # ── Core services ──────────────────────────────────────────────────
     memory = Memory(db_path="memory/tasks.db", context_path="memory/context.md")
@@ -96,6 +98,15 @@ def _build_xclaw():
 
     toolbox = ToolBox(memory=memory, kb=kb, scheduler=scheduler_placeholder)
     register_toolbox(tools, toolbox)
+
+    # ── Agent Swarm ───────────────────────────────────────────────────
+    swarm_fn = make_swarm_tool(llm=llm, tools=tools, hub=hub)
+    tools.register(swarm_fn, description="Dispatch parallel AI agents to complete a complex task", name="swarm_task")
+
+    # ── Plugin Manager ────────────────────────────────────────────────
+    plugin_manager = PluginManager(memory=memory)
+    plugin_manager.scan()
+    plugin_manager.register_all(tools)
 
     # ── AgentLoop ─────────────────────────────────────────────────────
     agent_loop = AgentLoop(
@@ -136,7 +147,7 @@ def _build_xclaw():
 
     gateway = Gateway(handler=commander.handle)
 
-    return gateway, memory, router, llm, hub, telemetry, kb, tools, scheduler
+    return gateway, memory, router, llm, hub, telemetry, kb, tools, scheduler, plugin_manager
 
 
 def main() -> None:
@@ -150,12 +161,12 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=int(os.getenv("PORT", "8000")))
     args = parser.parse_args()
 
-    gateway, memory, router, llm, hub, telemetry, kb, tools, scheduler = _build_xclaw()
+    gateway, memory, router, llm, hub, telemetry, kb, tools, scheduler, plugin_manager = _build_xclaw()
 
     providers = llm.available_providers()
     log.info("XClaw v3 starting — interface: %s", args.interface)
     log.info("LLM providers: %s", providers or ["NONE — set at least one API key in .env"])
-    log.info("Tools registered: %d", len(tools.tool_names()))
+    log.info("Tools registered: %d (inc. %d plugin tools)", len(tools.tool_names()), sum(len(p.tools) for p in plugin_manager._plugins.values() if p.enabled and p.loaded))
 
     if not providers:
         print("\n" + "="*60)
@@ -183,6 +194,7 @@ def main() -> None:
             telemetry=telemetry,
             kb=kb,
             tools=tools,
+            plugin_manager=plugin_manager,
         )
 
     if args.interface == "cli":
