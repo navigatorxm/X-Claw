@@ -57,7 +57,7 @@ XClaw: [searches GitHub] → [fetches HN threads] → [saves report] →
 ## 🚀 Quickstart (3 commands)
 
 ```bash
-git clone https://github.com/navigatorxm/OpenClaw.git && cd OpenClaw
+git clone https://github.com/navigatorxm/X-Claw.git && cd X-Claw
 bash scripts/quickstart.sh
 python main.py
 ```
