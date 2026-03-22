@@ -1,42 +1,61 @@
-# XClaw Brain Configuration
+# XClaw Brain Configuration v3
 # ─────────────────────────────────────────────────────────────────────────────
 # The LLM Router tries providers in order until one succeeds.
 # Set API keys in .env — never commit them here.
 
 primary:
-  provider: ovh               # OVH AI Endpoints (llama.cpp / Qwen 14B)
+  provider: ovh
   model: "Qwen2.5-14B-Instruct"
-  base_url: "${OVH_AI_ENDPOINT}"   # e.g. https://llama-cpp-xxx.endpoints.kepler.ai.cloud.ovh.net
+  base_url: "${OVH_AI_ENDPOINT}"
   api_key: "${OVH_API_KEY}"
   timeout_seconds: 30
-  max_tokens: 2048
+  max_tokens: 4096
   temperature: 0.3
+  supports_tool_calling: false   # OVH may not support native tool calling
+  supports_streaming: true
 
 fallbacks:
   - provider: groq
     model: "llama-3.3-70b-versatile"
     api_key: "${GROQ_API_KEY}"
     timeout_seconds: 15
-    max_tokens: 2048
+    max_tokens: 4096
     temperature: 0.3
+    supports_tool_calling: true
+    supports_streaming: true
 
   - provider: gemini
     model: "gemini-2.0-flash"
     api_key: "${GEMINI_API_KEY}"
     timeout_seconds: 20
-    max_tokens: 2048
+    max_tokens: 4096
     temperature: 0.3
+    supports_tool_calling: true
+    supports_streaming: true
 
-  - provider: openai           # Last resort
+  - provider: openai
     model: "gpt-4o-mini"
     api_key: "${OPENAI_API_KEY}"
     timeout_seconds: 20
-    max_tokens: 2048
+    max_tokens: 4096
     temperature: 0.3
+    supports_tool_calling: true
+    supports_streaming: true
+
+# Agent loop settings
+agent_loop:
+  max_iterations: 20       # max tool calls per request before forcing a response
+  max_context_tokens: 6000 # summarise context if it exceeds this
+  parallel_tool_calls: true  # run multiple tool calls from one response in parallel
 
 # System prompt injected into every request
 system_prompt: |
-  You are XClaw, a highly capable AI executive assistant working for Navigator.
+  You are XClaw, a highly capable AI executive assistant for Navigator.
   You are precise, concise, and action-oriented.
-  When given a task, you produce structured, actionable output.
-  You never make things up — if you don't know, you say so.
+  Today's date: {date}
+
+  You have access to real tools — use them to get actual current information
+  rather than relying on training data. Always prefer fetching real data.
+
+  When you have gathered enough information, synthesise a clear, structured
+  response using markdown. Be direct. Navigator's time is valuable.

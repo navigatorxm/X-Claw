@@ -1,29 +1,38 @@
 """
-XClaw Commander — Intent → Plan → Approve → Execute loop.
+XClaw Commander — v3.
 
-v2 upgrades:
-  • Parallel wave execution  — independent steps run concurrently via asyncio.gather()
-  • Dependency graph         — steps declare depends_on; Commander resolves execution order
-  • Result injection         — dependent steps receive prior step outputs as context
-  • Conversation history     — last N turns injected into planning prompt for context-awareness
-  • Progress callbacks       — optional async callback for streaming step updates to UI
-  • Plan editing             — Navigator can say "change step 2 to X" before approving
+Routes every request to the appropriate execution engine:
+  • AgentLoop (v3) — ReAct tool-calling loop. Used for all complex requests.
+  • Wave executor  (v2 fallback) — parallel plan waves. Used when the user
+    explicitly types a structured plan command (/plan ...) or as a fallback
+    if the AgentLoop is not configured.
 
-Flow:
-    1. Gateway sends Request
-    2. Commander injects conversation history, asks LLM for a dependency-aware Plan
-    3. Plan is presented to Navigator for approval
-    4. On approval, steps are executed in topological waves (parallel where possible)
-    5. Dependent steps receive prior results as injected context
-    6. Final result is stored in memory and returned
+Flow (v3 default):
+  1. Gateway sends Request
+  2. Commander stores the message in memory
+  3. Runs AgentLoop: LLM reasons + calls tools iteratively
+  4. Returns final result. No approval gate for v3 agentic mode.
+
+Approval gate (still available):
+  If Navigator types "/plan <intent>", Commander enters the v2 plan → approve
+  → parallel wave execution flow.
+
+Special commands (handled before routing):
+  /plan <text>   — force structured plan mode (shows steps, asks for approval)
+  /schedule ...  — register a recurring background task
+  /tasks         — show task list
+  /history       — show recent executions
+  /kb <query>    — search knowledge base
+  /sources       — list KB sources
+  /metrics       — show telemetry snapshot
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
+import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Awaitable, Callable
 
@@ -32,16 +41,18 @@ from core.memory import Memory
 
 if TYPE_CHECKING:
     from brain.llm_router import LLMRouter
+    from core.agent_loop import AgentLoop
+    from core.knowledge_base import KnowledgeBase
     from core.router import Router
+    from core.scheduler import Scheduler
+    from core.telemetry import Telemetry
 
 logger = logging.getLogger(__name__)
 
-# Type alias for streaming progress callbacks
 ProgressCallback = Callable[[str, dict], Awaitable[None]]
 
 
-# ── Plan data model ────────────────────────────────────────────────────────
-
+# ── v2 Plan structures (kept for /plan mode) ───────────────────────────────
 
 @dataclass
 class PlanStep:
@@ -60,26 +71,19 @@ class Plan:
     estimated_seconds: int = 0
 
 
-# ── Prompts ────────────────────────────────────────────────────────────────
-
 _PLAN_PROMPT = """\
-You are XClaw, an AI executive assistant for Navigator.
+You are XClaw, an AI executive assistant.
 
-CONVERSATION HISTORY (most recent last):
+CONVERSATION HISTORY:
 {history}
 
-NAVIGATOR'S NEW REQUEST:
+NAVIGATOR'S REQUEST:
 "{intent}"
 
-Your job:
-1. Understand the intent, taking prior conversation into account.
-2. Break it into concrete steps delegated to specialist agents.
-3. Mark which steps can run IN PARALLEL by leaving depends_on empty [].
-   Steps that need a prior step's output should list that step's id in depends_on.
-
+Break this into concrete steps for specialist agents.
 Available agents: research, content, leads, tasks, markets, code
 
-Return ONLY valid JSON (no prose, no markdown fences):
+Return ONLY valid JSON (no prose):
 {{
   "summary": "<one-line summary>",
   "estimated_seconds": <int>,
@@ -88,23 +92,27 @@ Return ONLY valid JSON (no prose, no markdown fences):
       "id": 1,
       "agent": "<agent_name>",
       "action": "<what this step does>",
-      "params": {{<key: value>}},
+      "params": {{}},
       "depends_on": [],
-      "description": "<one-line for display>"
+      "description": "<display label>"
     }}
   ]
 }}
 """
 
-_EDIT_KEYWORDS = frozenset({"change", "edit", "modify", "update", "replace", "step", "instead"})
+_EDIT_KEYWORDS = frozenset({"change", "edit", "modify", "update", "replace", "step"})
 
 
-# ── Commander ─────────────────────────────────────────────────────────────
+# ── Commander ──────────────────────────────────────────────────────────────
 
 
 class Commander:
     """
-    Orchestrates the full request lifecycle with parallel execution.
+    Top-level request router.
+
+    In v3, most requests go directly to the AgentLoop.
+    Slash commands are intercepted and handled inline.
+    The /plan command activates the v2 approval-gate workflow.
     """
 
     def __init__(
@@ -112,272 +120,301 @@ class Commander:
         llm: "LLMRouter",
         router: "Router",
         memory: Memory,
-        progress_hub: "ProgressHub | None" = None,
+        agent_loop: "AgentLoop | None" = None,
+        kb: "KnowledgeBase | None" = None,
+        scheduler: "Scheduler | None" = None,
+        telemetry: "Telemetry | None" = None,
+        progress_hub=None,
     ) -> None:
         self.llm = llm
         self.router = router
         self.memory = memory
+        self._agent_loop = agent_loop
+        self._kb = kb
+        self._scheduler = scheduler
+        self._telemetry = telemetry
         self._hub = progress_hub
-        self._pending: dict[str, Plan] = {}
+        self._pending_plans: dict[str, Plan] = {}
 
     # ------------------------------------------------------------------
-    # Public entry point
+    # Public entry point (called by Gateway)
     # ------------------------------------------------------------------
 
     async def handle(self, request: Request) -> Response:
         session = request.session_id
         text = request.text.strip()
 
-        if session in self._pending:
-            return await self._handle_approval(session, text)
-
-        plan = await self._build_plan(text, session)
-        self._pending[session] = plan
-        # Record Navigator's message in history
+        # Store user message in history
         self.memory.add_message(session, "user", text)
+
+        # ── Check for pending plan approval ───────────────────────────
+        if session in self._pending_plans:
+            return await self._handle_plan_approval(session, text)
+
+        # ── Slash commands ────────────────────────────────────────────
+        if text.startswith("/"):
+            return await self._handle_command(text, session)
+
+        # ── v3 Agentic mode (default) ─────────────────────────────────
+        if self._agent_loop:
+            trace_id = uuid.uuid4().hex[:12]
+            await self._emit(session, {"type": "agent_mode", "trace_id": trace_id})
+            try:
+                result = await self._agent_loop.run(text, session_id=session, trace_id=trace_id)
+            except Exception as exc:
+                logger.exception("[commander] AgentLoop failed")
+                result = f"Something went wrong: {exc}"
+            return Response(text=result)
+
+        # ── v2 fallback (no AgentLoop configured) ─────────────────────
+        plan = await self._build_plan(text, session)
+        self._pending_plans[session] = plan
         return self._present_plan(plan)
 
     # ------------------------------------------------------------------
-    # Planning
+    # Slash command dispatch
+    # ------------------------------------------------------------------
+
+    async def _handle_command(self, text: str, session: str) -> Response:
+        cmd, _, args = text.partition(" ")
+        cmd = cmd.lower()
+
+        if cmd == "/plan":
+            intent = args.strip() or "help me plan something"
+            plan = await self._build_plan(intent, session)
+            self._pending_plans[session] = plan
+            return self._present_plan(plan)
+
+        if cmd == "/tasks":
+            tasks = self.memory.get_tasks(session)
+            if not tasks:
+                return Response(text="No tasks.")
+            lines = [f"[{t['status']}] (id={t['id']}) {t['title']}" for t in tasks]
+            return Response(text="\n".join(lines))
+
+        if cmd == "/history":
+            execs = self.memory.get_executions(session, limit=5)
+            if not execs:
+                return Response(text="No history.")
+            lines = [f"• {e['executed_at'][:16]}  {e['summary']}" for e in execs]
+            return Response(text="Recent executions:\n" + "\n".join(lines))
+
+        if cmd == "/kb":
+            if not self._kb:
+                return Response(text="Knowledge base not configured.")
+            result = self._kb.search_formatted(args) if args else self._kb.list_sources().__str__()
+            return Response(text=result)
+
+        if cmd == "/sources":
+            if not self._kb:
+                return Response(text="Knowledge base not configured.")
+            sources = self._kb.list_sources()
+            if not sources:
+                return Response(text="Knowledge base is empty.")
+            lines = [f"• {s['source']} ({s['chunks']} chunks)" for s in sources]
+            return Response(text="\n".join(lines))
+
+        if cmd == "/schedule":
+            # /schedule <interval> <prompt>
+            # e.g. /schedule 1h check BTC price and alert me
+            parts = args.split(" ", 1)
+            if len(parts) < 2 or not self._scheduler:
+                return Response(text="Usage: /schedule <interval> <prompt>\nExample: /schedule 1h Check BTC price")
+            interval, prompt = parts[0], parts[1]
+            try:
+                task_id = self._scheduler.add_task(session, prompt, interval)
+                return Response(text=f"Scheduled (id={task_id}): '{prompt}' every {interval}")
+            except ValueError as exc:
+                return Response(text=f"Invalid interval: {exc}")
+
+        if cmd == "/scheduled":
+            if not self._scheduler:
+                return Response(text="Scheduler not configured.")
+            tasks = self._scheduler.list_tasks(session)
+            if not tasks:
+                return Response(text="No scheduled tasks.")
+            lines = [f"[{t['id']}] every {t['interval_str']}: {t['prompt'][:60]}" for t in tasks]
+            return Response(text="\n".join(lines))
+
+        if cmd == "/metrics":
+            if not self._telemetry:
+                return Response(text="Telemetry not configured.")
+            snap = self._telemetry.snapshot()
+            lines = [
+                f"Requests: {snap['requests_total']}",
+                f"Avg latency: {snap['latency']['avg_ms']:.0f}ms  P95: {snap['latency']['p95_ms']:.0f}ms",
+                f"Tool calls: {sum(snap['tool_calls'].values())} total",
+                f"Providers: {', '.join(self.llm.available_providers())}",
+            ]
+            top_tools = sorted(snap["tool_calls"].items(), key=lambda x: -x[1])[:5]
+            if top_tools:
+                lines.append("Top tools: " + ", ".join(f"{k}×{v}" for k, v in top_tools))
+            return Response(text="\n".join(lines))
+
+        if cmd in {"/help", "/?"}:
+            return Response(text=_HELP_TEXT)
+
+        # Unknown command — route to AgentLoop as natural language
+        if self._agent_loop:
+            result = await self._agent_loop.run(text, session_id=session)
+            return Response(text=result)
+        return Response(text=f"Unknown command: {cmd}. Type /help for commands.")
+
+    # ------------------------------------------------------------------
+    # v2 Plan mode (activated by /plan)
     # ------------------------------------------------------------------
 
     async def _build_plan(self, intent: str, session_id: str) -> Plan:
-        history = self.memory.format_history_for_prompt(session_id, limit=6)
+        history = self.memory.format_history_for_prompt(session_id, limit=4)
         prompt = _PLAN_PROMPT.format(intent=intent, history=history)
         raw = await self.llm.complete(prompt, session_id=session_id)
-
-        # Strip markdown fences if the LLM added them anyway
         raw = re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
-
         try:
             data = json.loads(raw)
-            steps = []
-            for s in data.get("steps", []):
-                steps.append(PlanStep(
-                    step_id=int(s.get("id", len(steps) + 1)),
-                    agent=s.get("agent", "research"),
-                    action=s.get("action", ""),
-                    params=s.get("params", {}),
-                    depends_on=[int(d) for d in s.get("depends_on", [])],
-                    description=s.get("description", s.get("action", "")),
-                ))
-            return Plan(
-                steps=steps,
-                summary=data.get("summary", intent),
-                estimated_seconds=int(data.get("estimated_seconds", 60)),
-            )
+            steps = [PlanStep(
+                step_id=int(s.get("id", i + 1)),
+                agent=s.get("agent", "research"),
+                action=s.get("action", ""),
+                params=s.get("params", {}),
+                depends_on=[int(d) for d in s.get("depends_on", [])],
+                description=s.get("description", s.get("action", "")),
+            ) for i, s in enumerate(data.get("steps", []))]
+            return Plan(steps=steps, summary=data.get("summary", intent),
+                        estimated_seconds=int(data.get("estimated_seconds", 60)))
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            logger.warning("Plan parse failed (%s), falling back to single step.", exc)
+            logger.warning("Plan parse failed: %s", exc)
             return Plan(
                 steps=[PlanStep(step_id=1, agent="research", action=intent, params={"query": intent})],
-                summary=intent,
-                estimated_seconds=60,
+                summary=intent, estimated_seconds=60,
             )
 
     def _present_plan(self, plan: Plan) -> Response:
         waves = self._build_waves(plan.steps)
         lines: list[str] = []
-        for i, wave in enumerate(waves, 1):
-            parallel = len(wave) > 1
+        for wave in waves:
             for step in wave:
-                parallel_tag = " ⟳ parallel" if parallel else ""
-                lines.append(f"  {step.step_id}. [{step.agent}]{parallel_tag} {step.description or step.action}")
-
-        minutes, seconds = divmod(plan.estimated_seconds, 60)
-        time_str = f"{minutes}m {seconds}s" if minutes else f"{seconds}s"
-        agents_used = ", ".join(dict.fromkeys(s.agent for s in plan.steps))
-
+                par = " ⟳" if len(wave) > 1 else ""
+                lines.append(f"  {step.step_id}. [{step.agent}]{par} {step.description or step.action}")
+        mins, secs = divmod(plan.estimated_seconds, 60)
+        time_str = f"{mins}m {secs}s" if mins else f"{secs}s"
         text = (
-            f"Here's my plan:\n\n"
-            f"{chr(10).join(lines)}\n\n"
-            f"Estimated time: ~{time_str}  |  Agents: {agents_used}\n\n"
-            f"✅ yes — approve   ❌ no — cancel   ✏️ 'change step N to …' — edit"
+            f"Plan:\n\n{chr(10).join(lines)}\n\n"
+            f"Estimated: ~{time_str}\n\n"
+            f"✅ yes — run   ❌ no — cancel   ✏️ 'change step N to …' — edit\n\n"
+            f"*Tip: Skip planning with regular messages — they go straight to the agentic loop.*"
         )
         return Response(text=text, requires_approval=True, plan={"summary": plan.summary})
 
-    # ------------------------------------------------------------------
-    # Approval handling
-    # ------------------------------------------------------------------
-
-    async def _handle_approval(self, session_id: str, text: str) -> Response:
-        plan = self._pending[session_id]
+    async def _handle_plan_approval(self, session: str, text: str) -> Response:
+        plan = self._pending_plans[session]
         lower = text.lower()
 
-        # Plan edit request
         if any(kw in lower for kw in _EDIT_KEYWORDS):
-            edited = await self._try_edit_plan(plan, text, session_id)
+            edited = await self._edit_plan(plan, text, session)
             if edited:
-                self._pending[session_id] = edited
+                self._pending_plans[session] = edited
                 return self._present_plan(edited)
 
-        # Approval
-        if lower in {"yes", "y", "approve", "✅", "go", "ok", "run", "execute"}:
-            self._pending.pop(session_id)
-            return await self._execute_plan(plan, session_id)
+        if lower in {"yes", "y", "approve", "✅", "go", "ok", "run"}:
+            self._pending_plans.pop(session)
+            return await self._execute_waves(plan, session)
 
-        # Cancel
         if lower in {"no", "n", "cancel", "❌", "stop", "abort"}:
-            self._pending.pop(session_id)
-            return Response(text="Cancelled. What else would you like to do?")
+            self._pending_plans.pop(session)
+            return Response(text="Cancelled.")
 
-        # Ambiguous — re-present the plan
         return self._present_plan(plan)
 
-    async def _try_edit_plan(self, plan: Plan, instruction: str, session_id: str) -> Plan | None:
-        """Ask the LLM to apply a human edit instruction to the existing plan."""
-        existing_json = json.dumps(
-            {"steps": [{"id": s.step_id, "agent": s.agent, "action": s.action,
-                        "params": s.params, "depends_on": s.depends_on} for s in plan.steps]},
-            indent=2,
-        )
-        prompt = (
-            f"Here is an existing plan in JSON:\n{existing_json}\n\n"
-            f"Navigator wants to change it: \"{instruction}\"\n\n"
-            f"Return the updated plan JSON using the same schema. "
-            f"Only change what was requested. Return ONLY valid JSON."
-        )
+    async def _edit_plan(self, plan: Plan, instruction: str, session_id: str) -> Plan | None:
+        existing = json.dumps({"steps": [
+            {"id": s.step_id, "agent": s.agent, "action": s.action,
+             "params": s.params, "depends_on": s.depends_on} for s in plan.steps
+        ]}, indent=2)
+        prompt = f"Update this plan:\n{existing}\n\nInstruction: {instruction}\n\nReturn updated plan JSON only."
         try:
             raw = await self.llm.complete(prompt, session_id=session_id)
             raw = re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
             data = json.loads(raw)
-            steps = [
-                PlanStep(
-                    step_id=int(s.get("id", i + 1)),
-                    agent=s["agent"],
-                    action=s["action"],
-                    params=s.get("params", {}),
-                    depends_on=[int(d) for d in s.get("depends_on", [])],
-                    description=s.get("description", s["action"]),
-                )
-                for i, s in enumerate(data.get("steps", []))
-            ]
+            steps = [PlanStep(step_id=int(s.get("id", i + 1)), agent=s["agent"],
+                              action=s["action"], params=s.get("params", {}),
+                              depends_on=[int(d) for d in s.get("depends_on", [])],
+                              description=s.get("description", s["action"]))
+                     for i, s in enumerate(data.get("steps", []))]
             return Plan(steps=steps, summary=plan.summary, estimated_seconds=plan.estimated_seconds)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("Plan edit failed: %s", exc)
             return None
 
-    # ------------------------------------------------------------------
-    # Parallel execution engine
-    # ------------------------------------------------------------------
-
     def _build_waves(self, steps: list[PlanStep]) -> list[list[PlanStep]]:
-        """
-        Topological sort into execution waves.
-        Steps in the same wave have no mutual dependencies → run in parallel.
-        """
         completed: set[int] = set()
         remaining = list(steps)
         waves: list[list[PlanStep]] = []
-
         while remaining:
             ready = [s for s in remaining if all(d in completed for d in s.depends_on)]
             if not ready:
-                # Circular or missing dep — take the first remaining step to avoid deadlock
                 ready = [remaining[0]]
-                logger.warning(
-                    "Dependency resolution fallback for step %d — running sequentially",
-                    remaining[0].step_id,
-                )
             waves.append(ready)
             for s in ready:
                 completed.add(s.step_id)
                 remaining.remove(s)
-
         return waves
 
-    async def _execute_plan(self, plan: Plan, session_id: str) -> Response:
+    async def _execute_waves(self, plan: Plan, session_id: str) -> Response:
+        import asyncio
         waves = self._build_waves(plan.steps)
-        results: dict[int, str] = {}   # step_id → result text
+        results: dict[int, str] = {}
         all_results: list[str] = []
 
-        total_waves = len(waves)
-        await self._emit(session_id, {"type": "plan_start", "summary": plan.summary, "waves": total_waves})
+        await self._emit(session_id, {"type": "plan_start", "summary": plan.summary, "waves": len(waves)})
 
-        for wave_num, wave in enumerate(waves, 1):
-            is_parallel = len(wave) > 1
-            logger.info(
-                "[%s] Wave %d/%d — %d step(s)%s: %s",
-                session_id, wave_num, total_waves, len(wave),
-                " (parallel)" if is_parallel else "",
-                ", ".join(f"{s.step_id}:{s.agent}" for s in wave),
-            )
+        for wn, wave in enumerate(waves, 1):
             await self._emit(session_id, {
-                "type": "wave_start",
-                "wave": wave_num,
-                "total_waves": total_waves,
-                "steps": [{"id": s.step_id, "agent": s.agent, "action": s.description or s.action} for s in wave],
-                "parallel": is_parallel,
+                "type": "wave_start", "wave": wn, "total_waves": len(waves),
+                "steps": [{"id": s.step_id, "agent": s.agent, "action": s.description} for s in wave],
+                "parallel": len(wave) > 1,
             })
 
-            # Build coroutines for all steps in this wave
             coros = [self._run_step(s, results, session_id) for s in wave]
-            wave_outputs = await asyncio.gather(*coros, return_exceptions=True)
+            outputs = await asyncio.gather(*coros, return_exceptions=True)
 
-            for step, output in zip(wave, wave_outputs):
-                if isinstance(output, Exception):
-                    result_text = f"⚠️ Step failed: {output}"
-                    logger.error("Step %d (%s) raised: %s", step.step_id, step.agent, output)
-                else:
-                    result_text = output
-                results[step.step_id] = result_text
-                all_results.append(f"**Step {step.step_id} [{step.agent}] — {step.description or step.action}:**\n{result_text}")
-
-                await self._emit(session_id, {
-                    "type": "step_done",
-                    "step_id": step.step_id,
-                    "agent": step.agent,
-                    "preview": result_text[:200],
-                })
+            for step, out in zip(wave, outputs):
+                txt = f"⚠️ {out}" if isinstance(out, Exception) else out
+                results[step.step_id] = txt
+                all_results.append(f"**Step {step.step_id} [{step.agent}]:** {step.description}\n{txt}")
+                await self._emit(session_id, {"type": "step_done", "step_id": step.step_id,
+                                              "agent": step.agent, "preview": txt[:200]})
 
         combined = "\n\n---\n\n".join(all_results)
         self.memory.save_execution(session_id, plan.summary, all_results)
         self.memory.add_message(session_id, "xclaw", combined[:600])
-
         await self._emit(session_id, {"type": "done"})
         return Response(text=f"Done.\n\n{combined}")
 
-    async def _run_step(self, step: PlanStep, results: dict[int, str], session_id: str) -> str:
-        """Run a single step, injecting prior step results as context."""
-        # Inject dependent results into params so the agent can reference them
-        enriched_params = dict(step.params)
+    async def _run_step(self, step: PlanStep, results: dict, session_id: str) -> str:
+        params = dict(step.params)
         if step.depends_on:
-            context_parts = []
-            for dep_id in step.depends_on:
-                if dep_id in results:
-                    context_parts.append(f"[Step {dep_id} result]:\n{results[dep_id][:1000]}")
-            if context_parts:
-                enriched_params["prior_context"] = "\n\n".join(context_parts)
-
-        return await self.router.dispatch(step.agent, step.action, enriched_params, session_id)
-
-    # ------------------------------------------------------------------
-    # Progress streaming
-    # ------------------------------------------------------------------
+            ctx = "\n\n".join(f"[Step {d}]:\n{results[d][:800]}" for d in step.depends_on if d in results)
+            if ctx:
+                params["prior_context"] = ctx
+        return await self.router.dispatch(step.agent, step.action, params, session_id)
 
     async def _emit(self, session_id: str, event: dict) -> None:
         if self._hub:
             await self._hub.emit(session_id, event)
 
 
-# ── Progress Hub ───────────────────────────────────────────────────────────
+# ── Progress Hub (unchanged from v2) ──────────────────────────────────────
+
+
+import asyncio as _asyncio
 
 
 class ProgressHub:
-    """
-    Per-session asyncio queues for streaming plan execution progress to UIs.
-
-    Usage:
-        hub = ProgressHub()
-        q = hub.subscribe("session-123")
-        # in another coroutine:
-        event = await q.get()   # {"type": "step_done", ...}
-    """
-
     def __init__(self) -> None:
-        self._queues: dict[str, asyncio.Queue] = {}
+        self._queues: dict[str, _asyncio.Queue] = {}
 
-    def subscribe(self, session_id: str) -> asyncio.Queue:
-        q: asyncio.Queue = asyncio.Queue()
+    def subscribe(self, session_id: str) -> _asyncio.Queue:
+        q: _asyncio.Queue = _asyncio.Queue()
         self._queues[session_id] = q
         return q
 
@@ -388,3 +425,28 @@ class ProgressHub:
         q = self._queues.get(session_id)
         if q:
             await q.put(event)
+
+
+# ── Help text ──────────────────────────────────────────────────────────────
+
+_HELP_TEXT = """
+**XClaw v3 Commands**
+
+Regular messages → go directly to the agentic AI loop (tool-calling)
+
+*Slash commands:*
+  /plan <intent>         Force structured plan mode (shows steps, asks approval)
+  /schedule <N> <prompt> Schedule a recurring task (30m, 2h, daily, daily@09:00)
+  /scheduled             List your scheduled tasks
+  /tasks                 Show your task list
+  /history               Show recent executions
+  /kb <query>            Search your knowledge base
+  /sources               List knowledge base documents
+  /metrics               Show performance metrics
+  /help                  Show this message
+
+*Examples:*
+  Research Harver Space competitors and write a comparison table
+  /schedule 1h Get BTC price and alert me if it drops below $90000
+  /plan Write a market entry strategy for Harver Space in the US
+""".strip()
