@@ -1,0 +1,21 @@
+# Environment
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# XClaw runtime data
+memory/tasks.db
+memory/logs/*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp

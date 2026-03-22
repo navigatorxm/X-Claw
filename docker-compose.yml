@@ -1,0 +1,31 @@
+version: "3.9"
+
+services:
+  xclaw-web:
+    build: .
+    container_name: xclaw-web
+    restart: unless-stopped
+    command: ["python", "main.py", "--interface", "web", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./memory:/app/memory     # persist tasks.db + context.md + logs
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  xclaw-telegram:
+    build: .
+    container_name: xclaw-telegram
+    restart: unless-stopped
+    command: ["python", "main.py", "--interface", "telegram"]
+    volumes:
+      - ./memory:/app/memory
+    env_file:
+      - .env
+    depends_on:
+      - xclaw-web
