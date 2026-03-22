@@ -208,6 +208,13 @@ def create_app(
             return JSONResponse(llm_router.provider_status())
         return JSONResponse([])
 
+    @app.get("/routing")
+    async def routing_summary():
+        """Return the active smart routing config — which models serve each tier."""
+        if llm_router and hasattr(llm_router, "routing_summary"):
+            return JSONResponse(llm_router.routing_summary())
+        return JSONResponse({})
+
     @app.get("/metrics")
     async def metrics_endpoint():
         if telemetry:
@@ -555,9 +562,9 @@ input:checked+.pc-slider:before{transform:translateX(14px);background:#fff}
           <div class="metric-sub">LLM-callable</div>
         </div>
         <div class="metric-card" style="grid-column:span 2">
-          <h4>Provider Health</h4>
+          <h4>Provider Health &amp; Smart Routing</h4>
           <table class="provider-table">
-            <thead><tr><th>Provider</th><th>Status</th><th>Calls</th></tr></thead>
+            <thead><tr><th>Provider / Model</th><th>Tier</th><th>Status</th><th>Cost/1M</th><th>Tools</th></tr></thead>
             <tbody id="m-providers"></tbody>
           </table>
         </div>
@@ -978,11 +985,14 @@ async function refreshMetrics() {
     document.getElementById('m-traces').textContent = metrics.total_traces ?? '—';
     document.getElementById('m-tools').textContent = toolsList.length;
     // Provider table
+    const tierColor = {cheap:'var(--green)',standard:'var(--yellow)',premium:'var(--orange)'};
     document.getElementById('m-providers').innerHTML = providers.map(p => `
       <tr>
-        <td><span class="pdot ${p.available?'up':p.circuit_open?'down':'unk'}"></span>${esc(p.provider)}</td>
-        <td style="color:${p.available?'var(--green)':p.circuit_open?'var(--red)':'var(--text-dim)'}">${p.available?'Online':p.circuit_open?'Circuit open':'Unknown'}</td>
-        <td style="color:var(--text-mid)">${p.total_calls ?? 0}</td>
+        <td><span class="pdot ${p.available?'up':p.circuit_open?'down':'unk'}"></span><b>${esc(p.provider)}</b> <span style="color:#555;font-size:.72rem">${esc(p.model||'')}</span></td>
+        <td style="color:${tierColor[p.tier]||'var(--text-mid)'};font-size:.75rem;font-weight:600;text-transform:uppercase">${esc(p.tier||'—')}</td>
+        <td style="color:${p.available?'var(--green)':p.circuit_open?'var(--red)':'var(--text-dim)'}">${p.available?'Online':p.circuit_open?'Circuit open':'No key'}</td>
+        <td style="color:var(--text-mid);font-size:.75rem">${p.cost_per_1m!=null?('$'+p.cost_per_1m.toFixed(3)):'—'}</td>
+        <td style="color:var(--text-dim);font-size:.72rem">${p.tool_calling?'✓':'sim'}</td>
       </tr>`).join('');
     // Tool chips
     allToolNames = toolsList;

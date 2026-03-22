@@ -1,52 +1,158 @@
-# XClaw Brain Configuration v3
+# XClaw Brain Configuration v3.1
 # ─────────────────────────────────────────────────────────────────────────────
-# The LLM Router tries providers in order until one succeeds.
+# Smart routing: XClaw picks the cheapest model that can handle the job.
+#
+# Routing tiers
+# ─────────────
+#   cheap    → simple questions, formatting, single-step lookups
+#              Target: Groq llama-3.1-8b / Gemini Flash / DO llama3-8b
+#   standard → most tasks — research, multi-step reasoning, tool use
+#              Target: Groq llama-3.3-70b / Gemini Flash / DO llama3-70b
+#   premium  → complex coding, deep analysis, long documents
+#              Target: OpenAI gpt-4o-mini / Gemini 1.5 Pro / DO mistral
+#
+# Provider priority within each tier: first available wins.
 # Set API keys in .env — never commit them here.
+#
+# DigitalOcean GenAI serverless inference
+# ────────────────────────────────────────
+# Create a serverless endpoint at: https://cloud.digitalocean.com/gen-ai
+# The API is 100% OpenAI-compatible. Set:
+#   DO_AI_ENDPOINT=https://<your-agent-endpoint>/v1
+#   DO_API_KEY=<your DO personal access token>
+#   DO_AI_MODEL=llama3-8b-instruct   (or any model below)
+#
+# Available DO GenAI models (as of 2025):
+#   llama3-8b-instruct        — fast, cheap, good for simple tasks
+#   llama3-70b-instruct       — strong reasoning, most tasks
+#   llama3.1-405b-instruct    — frontier reasoning
+#   mixtral-8x7b-instruct     — fast mixture-of-experts
+#   mistral-7b-instruct       — efficient general purpose
+#   codestral-latest          — code specialist
+#   deepseek-r1               — deep reasoning / chain-of-thought
 
-primary:
-  provider: ovh
-  model: "Qwen2.5-14B-Instruct"
-  base_url: "${OVH_AI_ENDPOINT}"
-  api_key: "${OVH_API_KEY}"
-  timeout_seconds: 30
-  max_tokens: 4096
-  temperature: 0.3
-  supports_tool_calling: false   # OVH may not support native tool calling
-  supports_streaming: true
+# ── Routing tier definitions ───────────────────────────────────────────────
+# Each tier lists providers in priority order (first available wins).
+# The router picks tier automatically based on prompt complexity.
 
-fallbacks:
-  - provider: groq
+routing:
+  # Thresholds for automatic tier selection
+  cheap_max_words: 30        # ≤ 30 words → cheap tier
+  standard_max_words: 120    # 31–120 words → standard tier
+  # > 120 words or complex keywords → premium tier
+
+  # Keywords that force a higher tier regardless of word count
+  premium_keywords:
+    - "write a full"
+    - "implement"
+    - "architect"
+    - "refactor"
+    - "comprehensive"
+    - "in depth"
+    - "compare and contrast"
+    - "generate a report"
+    - "debug"
+    - "step by step"
+
+  standard_keywords:
+    - "research"
+    - "analyse"
+    - "analyze"
+    - "summarise"
+    - "summarize"
+    - "explain"
+    - "list all"
+    - "find"
+    - "search"
+
+# ── Provider definitions ────────────────────────────────────────────────────
+# All providers across all tiers. Referenced by name in tier_order below.
+
+providers:
+
+  # ── Groq — fastest inference, very cheap ────────────────────────────
+  - name: groq_fast
+    provider: groq
+    model: "llama-3.1-8b-instant"
+    api_key: "${GROQ_API_KEY}"
+    timeout_seconds: 10
+    max_tokens: 2048
+    temperature: 0.3
+    supports_tool_calling: true
+    supports_streaming: true
+    tier: cheap
+    cost_per_1m_tokens: 0.05   # USD input
+
+  - name: groq_standard
+    provider: groq
     model: "llama-3.3-70b-versatile"
     api_key: "${GROQ_API_KEY}"
-    timeout_seconds: 15
+    timeout_seconds: 20
     max_tokens: 4096
     temperature: 0.3
     supports_tool_calling: true
     supports_streaming: true
+    tier: standard
+    cost_per_1m_tokens: 0.59
 
-  - provider: gemini
+  # ── Gemini — Google, generous free tier ──────────────────────────────
+  - name: gemini_flash
+    provider: gemini
     model: "gemini-2.0-flash"
     api_key: "${GEMINI_API_KEY}"
+    base_url: "https://generativelanguage.googleapis.com/v1beta/openai"
     timeout_seconds: 20
     max_tokens: 4096
     temperature: 0.3
     supports_tool_calling: true
     supports_streaming: true
+    tier: cheap
+    cost_per_1m_tokens: 0.075   # free tier up to 15 RPM
 
-  - provider: openai
-    model: "gpt-4o-mini"
-    api_key: "${OPENAI_API_KEY}"
+  - name: gemini_flash_standard
+    provider: gemini
+    model: "gemini-2.0-flash"
+    api_key: "${GEMINI_API_KEY}"
+    base_url: "https://generativelanguage.googleapis.com/v1beta/openai"
     timeout_seconds: 20
-    max_tokens: 4096
+    max_tokens: 8192
     temperature: 0.3
     supports_tool_calling: true
     supports_streaming: true
+    tier: standard
+    cost_per_1m_tokens: 0.075
 
-  # DigitalOcean GenAI — serverless inference, pay-per-token, no GPU needed
-  # Create endpoint: https://cloud.digitalocean.com/gen-ai
-  # API is OpenAI-compatible: set DO_AI_ENDPOINT + DO_API_KEY
-  - provider: digitalocean
-    model: "${DO_AI_MODEL:-llama3-8b-instruct}"
+  - name: gemini_pro
+    provider: gemini
+    model: "gemini-1.5-pro"
+    api_key: "${GEMINI_API_KEY}"
+    base_url: "https://generativelanguage.googleapis.com/v1beta/openai"
+    timeout_seconds: 30
+    max_tokens: 8192
+    temperature: 0.3
+    supports_tool_calling: true
+    supports_streaming: true
+    tier: premium
+    cost_per_1m_tokens: 1.25
+
+  # ── DigitalOcean GenAI — serverless, pay-per-token, no infra needed ──
+  # Docs: https://docs.digitalocean.com/products/gen-ai-platform/
+  - name: do_fast
+    provider: digitalocean
+    model: "${DO_AI_MODEL_FAST:-llama3-8b-instruct}"
+    base_url: "${DO_AI_ENDPOINT}"
+    api_key: "${DO_API_KEY}"
+    timeout_seconds: 20
+    max_tokens: 2048
+    temperature: 0.3
+    supports_tool_calling: false
+    supports_streaming: true
+    tier: cheap
+    cost_per_1m_tokens: 0.10
+
+  - name: do_standard
+    provider: digitalocean
+    model: "${DO_AI_MODEL:-llama3-70b-instruct}"
     base_url: "${DO_AI_ENDPOINT}"
     api_key: "${DO_API_KEY}"
     timeout_seconds: 30
@@ -54,26 +160,122 @@ fallbacks:
     temperature: 0.3
     supports_tool_calling: false
     supports_streaming: true
+    tier: standard
+    cost_per_1m_tokens: 0.59
 
-  # Ollama — runs 100% locally, zero cost, full privacy
-  # Install: https://ollama.com  •  then: ollama pull llama3.2
-  - provider: ollama
-    model: "${OLLAMA_MODEL:-llama3.2}"
-    base_url: "${OLLAMA_HOST:-http://localhost:11434}/v1"
-    api_key: "ollama"
-    timeout_seconds: 60
+  - name: do_premium
+    provider: digitalocean
+    model: "${DO_AI_MODEL_PREMIUM:-mistral-7b-instruct}"
+    base_url: "${DO_AI_ENDPOINT}"
+    api_key: "${DO_API_KEY}"
+    timeout_seconds: 40
+    max_tokens: 8192
+    temperature: 0.3
+    supports_tool_calling: false
+    supports_streaming: true
+    tier: premium
+    cost_per_1m_tokens: 0.25
+
+  # ── OpenAI ────────────────────────────────────────────────────────────
+  - name: openai_mini
+    provider: openai
+    model: "gpt-4o-mini"
+    api_key: "${OPENAI_API_KEY}"
+    timeout_seconds: 25
+    max_tokens: 4096
+    temperature: 0.3
+    supports_tool_calling: true
+    supports_streaming: true
+    tier: standard
+    cost_per_1m_tokens: 0.15
+
+  - name: openai_full
+    provider: openai
+    model: "gpt-4o"
+    api_key: "${OPENAI_API_KEY}"
+    timeout_seconds: 40
+    max_tokens: 8192
+    temperature: 0.3
+    supports_tool_calling: true
+    supports_streaming: true
+    tier: premium
+    cost_per_1m_tokens: 2.50
+
+  # ── OVH AI — European data sovereignty option ─────────────────────────
+  - name: ovh_standard
+    provider: ovh
+    model: "Qwen2.5-14B-Instruct"
+    base_url: "${OVH_AI_ENDPOINT}"
+    api_key: "${OVH_API_KEY}"
+    timeout_seconds: 30
     max_tokens: 4096
     temperature: 0.3
     supports_tool_calling: false
     supports_streaming: true
+    tier: standard
+    cost_per_1m_tokens: 0.20
 
-# Agent loop settings
+  # ── Ollama — 100% local, zero cost, full privacy ──────────────────────
+  - name: ollama_local
+    provider: ollama
+    model: "${OLLAMA_MODEL:-llama3.2}"
+    base_url: "${OLLAMA_HOST:-http://localhost:11434}/v1"
+    api_key: "ollama"
+    timeout_seconds: 120
+    max_tokens: 4096
+    temperature: 0.3
+    supports_tool_calling: false
+    supports_streaming: true
+    tier: cheap
+    cost_per_1m_tokens: 0.0    # local, free
+
+  - name: ollama_standard
+    provider: ollama
+    model: "${OLLAMA_MODEL_LARGE:-llama3.1:70b}"
+    base_url: "${OLLAMA_HOST:-http://localhost:11434}/v1"
+    api_key: "ollama"
+    timeout_seconds: 180
+    max_tokens: 4096
+    temperature: 0.3
+    supports_tool_calling: false
+    supports_streaming: true
+    tier: standard
+    cost_per_1m_tokens: 0.0    # local, free
+
+# ── Tier ordering — cheapest capable provider first ───────────────────────
+# For tool-calling requests, router skips providers with supports_tool_calling: false
+# and falls back to simulated tool calling as a last resort.
+
+tier_order:
+  cheap:
+    - groq_fast          # 8b, instant, 0.05/1M — fastest for simple Q&A
+    - ollama_local       # local first if running
+    - gemini_flash       # free tier fallback
+    - do_fast            # DO 8b fallback
+
+  standard:
+    - groq_standard      # 70b versatile, great price/performance
+    - gemini_flash_standard
+    - ovh_standard
+    - openai_mini
+    - do_standard
+    - ollama_standard
+
+  premium:
+    - gemini_pro
+    - openai_full
+    - do_premium
+    # Note: Claude Opus/Sonnet not listed — use Claude Code for those tasks
+
+# ── Agent loop ─────────────────────────────────────────────────────────────
 agent_loop:
-  max_iterations: 20       # max tool calls per request before forcing a response
-  max_context_tokens: 6000 # summarise context if it exceeds this
-  parallel_tool_calls: true  # run multiple tool calls from one response in parallel
+  max_iterations: 20
+  max_context_tokens: 6000
+  parallel_tool_calls: true
+  default_tier: standard        # tier used when complexity is ambiguous
+  force_tool_calling_tier: standard  # minimum tier for requests that need tools
 
-# System prompt injected into every request
+# ── System prompt ──────────────────────────────────────────────────────────
 system_prompt: |
   You are XClaw, a highly capable AI executive assistant for Navigator.
   You are precise, concise, and action-oriented.
