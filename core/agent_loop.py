@@ -144,9 +144,23 @@ class AgentLoop:
         tools_schema = self._tools.as_openai_tools()
         iteration = 0
 
+        # Auto-select routing tier from intent complexity
+        try:
+            from brain.llm_router import _classify_tier, STANDARD, PREMIUM
+            routing_cfg = getattr(self._llm, "_routing_cfg", {})
+            intent_tier = _classify_tier(intent, routing_cfg)
+            # Tool-heavy agents always get at least standard
+            if intent_tier == "cheap":
+                intent_tier = STANDARD
+        except Exception:
+            intent_tier = "standard"
+
+        logger.info("[loop:%s] routing tier: %s", session_id[:8], intent_tier)
+
         await self._emit(session_id, {
             "type": "agent_start",
             "intent": intent,
+            "tier": intent_tier,
             "tools": self._tools.tool_names(),
         })
 
@@ -160,7 +174,7 @@ class AgentLoop:
 
             try:
                 response = await self._llm.complete_with_tools(
-                    messages, tools=tools_schema, session_id=session_id
+                    messages, tools=tools_schema, session_id=session_id, tier=intent_tier
                 )
             except Exception as exc:
                 logger.error("[loop] LLM call failed: %s", exc)
