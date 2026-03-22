@@ -10,12 +10,12 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routes import agents, approve, execute, history, policies
+from .routes import agents, approve, execute, history, policies, risk
 
 app = FastAPI(
     title="XClaw Finance API",
-    description="AI Agent Financial Execution Platform — policy-gated trading with full audit trail.",
-    version="1.0.0",
+    description="AI Agent Financial Execution Platform — policy + risk-gated trading with full audit trail.",
+    version="1.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -32,6 +32,7 @@ app.include_router(execute.router)
 app.include_router(approve.router)
 app.include_router(history.router)
 app.include_router(policies.router)
+app.include_router(risk.router)
 
 
 @app.get("/", tags=["health"])
@@ -53,5 +54,8 @@ async def health() -> dict:
             "POST /policies",
             "GET  /policies/{policy_id}",
             "DELETE /policies/{policy_id}",
+            "POST /risk/config",
+            "GET  /risk/config/{agent_id}",
+            "GET  /risk/status/{agent_id}",
         ],
     }

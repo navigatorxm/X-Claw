@@ -9,6 +9,8 @@ from execution_engine.adapters.mock import MockExchangeAdapter
 from execution_engine.engine import ExecutionEngine
 from policy_engine.engine import PolicyEngine
 from policy_engine.store import PolicyStore
+from risk_engine.exposure_tracker import ExposureTracker
+from risk_engine.risk_engine import RiskConfigStore, RiskEngine
 from wallet.manager import WalletManager
 
 
@@ -41,14 +43,32 @@ def get_audit_logger() -> AuditLogger:
 
 
 @lru_cache(maxsize=1)
+def get_exposure_tracker() -> ExposureTracker:
+    return ExposureTracker(db_path=DB_PATH)
+
+
+@lru_cache(maxsize=1)
+def get_risk_config_store() -> RiskConfigStore:
+    return RiskConfigStore(db_path=DB_PATH)
+
+
+@lru_cache(maxsize=1)
+def get_risk_engine() -> RiskEngine:
+    return RiskEngine(
+        config_store=get_risk_config_store(),
+        tracker=get_exposure_tracker(),
+    )
+
+
+@lru_cache(maxsize=1)
 def get_execution_engine() -> ExecutionEngine:
     engine = ExecutionEngine(
         wallet_manager=get_wallet_manager(),
         policy_engine=get_policy_engine(),
         approval_queue=get_approval_queue(),
         audit_logger=get_audit_logger(),
+        risk_engine=get_risk_engine(),
     )
-    # Register available adapters — add real ones here
     engine.register_adapter(MockExchangeAdapter())
     return engine
 
