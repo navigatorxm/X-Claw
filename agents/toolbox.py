@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING
 import httpx
 
 from core.tool_registry import ToolRegistry
+from agents.integrations import github_tools, news_tools, communication_tools
 
 if TYPE_CHECKING:
     from core.knowledge_base import KnowledgeBase
@@ -399,11 +400,12 @@ class ToolBox:
 
 def register_toolbox(registry: ToolRegistry, toolbox: ToolBox) -> None:
     """
-    Register all ToolBox methods into the given ToolRegistry.
+    Register all ToolBox methods + standalone integration functions into the registry.
     Methods starting with _ are skipped.
     """
     import inspect
 
+    # Register ToolBox instance methods
     skip = {"register_toolbox"}
     for name in dir(toolbox):
         if name.startswith("_") or name in skip:
@@ -413,5 +415,17 @@ def register_toolbox(registry: ToolRegistry, toolbox: ToolBox) -> None:
             continue
         doc = (fn.__doc__ or "").strip().split("\n")[0]
         registry.register(fn, description=doc, name=name)
+
+    # Register integration modules (standalone async functions)
+    _integration_modules = [github_tools, news_tools, communication_tools]
+    for module in _integration_modules:
+        for name in dir(module):
+            if name.startswith("_"):
+                continue
+            fn = getattr(module, name)
+            if not (callable(fn) and inspect.isfunction(fn)):
+                continue
+            doc = (fn.__doc__ or "").strip().split("\n")[0]
+            registry.register(fn, description=doc, name=name)
 
     logger.info("[toolbox] registered %d tools", len(registry.tool_names()))
