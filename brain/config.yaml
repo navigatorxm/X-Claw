@@ -42,6 +42,18 @@ fallbacks:
     supports_tool_calling: true
     supports_streaming: true
 
+  # Ollama — runs 100% locally, zero cost, full privacy
+  # Install: https://ollama.com  •  then: ollama pull llama3.2
+  - provider: ollama
+    model: "${OLLAMA_MODEL:-llama3.2}"
+    base_url: "${OLLAMA_HOST:-http://localhost:11434}/v1"
+    api_key: "ollama"
+    timeout_seconds: 60
+    max_tokens: 4096
+    temperature: 0.3
+    supports_tool_calling: false
+    supports_streaming: true
+
 # Agent loop settings
 agent_loop:
   max_iterations: 20       # max tool calls per request before forcing a response

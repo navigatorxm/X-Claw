@@ -1,162 +1,282 @@
-# XClaw — NavOS AI Executive Assistant
+<div align="center">
 
-> Navigator gives intent → XClaw plans → Navigator approves → XClaw executes → Reports back.
-> Never acts without confirmation. Always explains what it's about to do.
+# 🦅 XClaw
 
----
+### Your AI Executive Assistant — Self-Hosted, Open Source, Actually Useful
 
-## Architecture
+**Search the web · Browse GitHub · Check the weather · Send email · Run code · Remember everything**
+**— all from a single chat window or Telegram.**
 
-```
-Navigator (Telegram / Web / CLI)
-         │
-         ▼
-    XClaw Gateway          ← normalises all input channels
-         │
-         ▼
-    Commander              ← Intent → Plan → Approve → Execute loop
-         │
-    LLM Brain              ← OVH Qwen 14B (primary) + Groq/Gemini/OpenAI fallbacks
-         │
-         ▼
-    Router → Agent Swarm
-              ├── research   Web search, summarise, monitor
-              ├── content    Write, format, draft emails
-              ├── leads      Find, qualify, outreach
-              ├── tasks      Plan, track, remind
-              ├── markets    Price alerts, analysis
-              ├── code       Generate, review, execute
-              └── [+yours]   Add any agent via SKILL.md
-```
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Free Tier Friendly](https://img.shields.io/badge/cloud-free%20tier%20friendly-brightgreen)](#llm-providers)
+[![Ollama](https://img.shields.io/badge/Ollama-100%25%20local-orange)](https://ollama.com)
+
+</div>
 
 ---
 
-## Quickstart
+## What is XClaw?
 
-### 1. Clone & configure
+XClaw is an **agentic AI assistant** that actually *does* things — not just talks about doing them.
 
-```bash
-git clone https://github.com/navigatorxm/OpenClaw
-cd OpenClaw
-cp .env.example .env
-# Edit .env — add at least one LLM API key
+It runs a **ReAct loop** (Reason → Act → Observe → repeat) powered by any LLM you choose, using 30+ real tools to search the web, browse GitHub, fetch live weather, read RSS feeds, run Python code, manage tasks, and more.
+
+**Self-hosted. No subscription. Yours.**
+
 ```
+You: "Search GitHub for the top Rust web frameworks, check their HN discussions,
+      and save a comparison report."
 
-### 2. Install dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### 3. Run
-
-**CLI (no API keys needed for dev):**
-```bash
-python main.py --interface cli
-```
-
-**Web dashboard:**
-```bash
-python main.py --interface web
-# Open http://localhost:8000
-```
-
-**Telegram bot:**
-```bash
-python main.py --interface telegram
-```
-
-**Docker (all-in-one):**
-```bash
-docker compose up -d
+XClaw: [searches GitHub] → [fetches HN threads] → [saves report] →
+       "Here's your comparison: Axum leads with 17k ⭐, followed by Actix-web..."
 ```
 
 ---
 
-## Example Flow
+## ✨ What it can do
+
+| Category | Tools |
+|---|---|
+| 🌐 **Web** | DuckDuckGo search, page fetching, link extraction |
+| 📰 **News** | Hacker News, Reddit, any RSS/Atom feed |
+| 🐙 **GitHub** | Search repos, trending, README, issues, PRs, create issues |
+| 🌍 **Info** | Wikipedia summaries, worldwide weather forecasts |
+| 📧 **Email** | Send email via SMTP (Gmail, Outlook, custom) |
+| 🐍 **Code** | Execute Python in a sandboxed subprocess |
+| 📁 **Files** | Read, write, and list files in memory directory |
+| 📊 **Markets** | Live crypto prices, top gainers/losers (Binance API) |
+| ⏰ **Schedule** | Recurring tasks ("check HN every 2h", "daily market brief") |
+| 🧠 **Memory** | Persistent conversation history, task list, knowledge base |
+| 📚 **Knowledge** | Ingest your docs (PDF, MD, TXT) and search them later |
+
+**All free APIs — no paid keys required to get started.**
+
+---
+
+## 🚀 Quickstart (3 commands)
+
+```bash
+git clone https://github.com/navigatorxm/OpenClaw.git && cd OpenClaw
+bash scripts/quickstart.sh
+python main.py
+```
+
+Open **http://localhost:8000** — you're in.
+
+> **No LLM key?** Install [Ollama](https://ollama.com) and run `ollama pull llama3.2` for 100% local, free, private inference.
+
+---
+
+## 🔌 LLM Providers
+
+XClaw tries providers in order until one succeeds. Mix and match:
+
+| Provider | Free Tier | Speed | Privacy | Setup |
+|---|---|---|---|---|
+| **Ollama** (local) | ♾️ unlimited | fast | 🔒 100% local | `ollama pull llama3.2` |
+| **Groq** | 6k tok/min | ⚡ fastest | cloud | [console.groq.com](https://console.groq.com) |
+| **Google Gemini** | generous | fast | cloud | [aistudio.google.com](https://aistudio.google.com/apikey) |
+| **OpenAI** | pay-as-you-go | fast | cloud | [platform.openai.com](https://platform.openai.com/api-keys) |
+| **OVH AI** | free trial | medium | 🇪🇺 EU | [endpoints.ai.cloud.ovh.net](https://endpoints.ai.cloud.ovh.net) |
+
+Set your key(s) in `.env` — XClaw auto-detects which ones are available.
+
+---
+
+## 🏗️ Architecture
 
 ```
-Navigator › Research competitors of Harver Space
-
-XClaw › Here's my plan:
-
-  1. [research] Search aerospace startups in India
-  2. [research] Pull company profiles and summaries
-  3. [content]  Format results as a comparison table
-
-  Estimated time: ~3m 0s
-  Agents involved: research, content
-
-  ✅ Reply 'yes' to approve   ❌ Reply 'no' to cancel
-
-Navigator › yes
-
-XClaw › Done. Here's what I found:
-
-  **Step 1 (research):**
-  ...
+┌─────────────────────────────────────────────────────────┐
+│                   Interfaces                            │
+│   Web (FastAPI + SSE)  │  Telegram  │  CLI             │
+└──────────────┬──────────────────────────────────────────┘
+               │ Gateway normalises all channels
+               ▼
+┌─────────────────────────────────────────────────────────┐
+│                  Commander                              │
+│   routes intent → AgentLoop  /plan → wave executor     │
+└──────────────┬──────────────────────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────────────────────┐
+│                Agent Loop (ReAct)                       │
+│                                                         │
+│   LLM ──→ tool calls ──→ parallel execution            │
+│    ▲              │                                     │
+│    └──────────────┘  (up to 20 iterations)             │
+└──────────────┬──────────────────────────────────────────┘
+               │
+       ┌───────┴────────┐
+       ▼                ▼
+┌──────────────┐  ┌─────────────────────────────────────┐
+│  LLM Router  │  │           Tool Registry             │
+│              │  │                                     │
+│  OVH / Groq  │  │  Web · GitHub · News · Email        │
+│  Gemini /    │  │  Code · Files · Markets             │
+│  OpenAI /    │  │  Schedule · Knowledge · Memory      │
+│  Ollama      │  │  (30+ tools, easily extensible)     │
+└──────────────┘  └─────────────────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────────────────────┐
+│  Memory (SQLite WAL)  │  KnowledgeBase  │  Scheduler   │
+└─────────────────────────────────────────────────────────┘
 ```
 
----
-
-## LLM Priority
-
-| Priority | Provider | Model | Cost |
-|----------|----------|-------|------|
-| 1 (primary) | OVH AI Endpoints | Qwen2.5-14B-Instruct | Free tier |
-| 2 | Groq | llama-3.3-70b | Free tier |
-| 3 | Gemini | gemini-2.0-flash | Free tier |
-| 4 | OpenAI | gpt-4o-mini | Paid |
-
-Configure in `brain/config.yaml`. Keys go in `.env`.
+**Key design decisions:**
+- **ReAct loop** — LLM reasons step by step, calling tools as needed
+- **Parallel tool execution** — multiple tool calls from one LLM response run concurrently
+- **Circuit breaker** — dead providers are skipped, auto-retry after 60s
+- **Context compression** — long conversations summarised automatically
+- **No vendor lock-in** — swap any LLM provider in one config line
 
 ---
 
-## Adding a New Agent
-
-See [`agents/SKILL.md`](agents/SKILL.md) — takes ~15 minutes.
-
----
-
-## Repo Structure
+## 📁 Project Structure
 
 ```
 OpenClaw/
-├── main.py                 ← Entry point
-├── core/
-│   ├── gateway.py          ← Unified interface normaliser
-│   ├── commander.py        ← Intent → Plan → Approve → Execute
-│   ├── router.py           ← Agent dispatcher
-│   └── memory.py           ← SQLite + Markdown persistence
-├── agents/
-│   ├── research.py
-│   ├── content.py
-│   ├── leads.py
-│   ├── tasks.py
-│   ├── markets.py
-│   ├── code.py
-│   └── SKILL.md            ← How to add agents
+├── main.py                     # Entry point — wires everything together
 ├── brain/
-│   ├── llm_router.py       ← Multi-provider LLM with fallback
-│   └── config.yaml         ← Model configuration
+│   ├── config.yaml             # LLM providers, model settings
+│   └── llm_router.py           # Provider routing, tool calling, streaming
+├── core/
+│   ├── agent_loop.py           # ReAct loop — the brain
+│   ├── commander.py            # Intent routing, /plan, slash commands
+│   ├── gateway.py              # Channel normalisation (Web/Telegram/CLI)
+│   ├── knowledge_base.py       # Document ingestion + TF-IDF search
+│   ├── memory.py               # SQLite persistence (history, tasks, cache)
+│   ├── router.py               # Specialist agent dispatch
+│   ├── scheduler.py            # Recurring task engine
+│   ├── telemetry.py            # Latency P95, token budgets, traces
+│   └── tool_registry.py        # Tool schema + dispatch
+├── agents/
+│   ├── toolbox.py              # 30+ LLM-callable tools
+│   ├── base.py                 # Retry + timeout base class
+│   ├── research.py             # Deep web research agent
+│   └── integrations/
+│       ├── github_tools.py     # 8 GitHub tools (search, trending, issues…)
+│       ├── news_tools.py       # HN, Wikipedia, Weather, RSS, Reddit
+│       └── communication_tools.py  # Email send/draft
 ├── interface/
-│   ├── telegram.py
-│   ├── web/app.py
-│   └── cli.py
-├── memory/
-│   ├── context.md          ← Navigator's rolling context
-│   └── logs/
-├── docker-compose.yml
-├── Dockerfile
-├── requirements.txt
-└── .env.example
+│   └── web/app.py              # FastAPI dashboard + SSE streaming
+├── scripts/
+│   └── quickstart.sh           # Zero-friction setup
+├── .env.example                # Configuration template
+└── requirements.txt
 ```
 
 ---
 
-## Philosophy
+## 💬 Slash Commands
 
-- **Private first** — OVH runs locally, nothing leaves your infra by default.
-- **Approval gate** — XClaw never takes action without Navigator's confirmation.
-- **Extensible** — add an agent in one file, register in one line.
-- **Simple** — SQLite + Markdown files, no external services required to start.
+| Command | Description |
+|---|---|
+| `/plan <goal>` | Break goal into parallel steps, approve then execute |
+| `/tasks` | Show your task list |
+| `/history` | Recent execution history |
+| `/kb` | Knowledge base stats |
+| `/sources` | List ingested documents |
+| `/schedule <task> <interval>` | Schedule recurring task |
+| `/scheduled` | List scheduled tasks |
+| `/metrics` | Token usage, latency P95, provider health |
+| `/help` | All commands |
+
+---
+
+## 🔧 Configuration
+
+```bash
+cp .env.example .env
+# Set at least one LLM key, then:
+python main.py
+```
+
+**Minimum config for each interface:**
+
+```bash
+# Web only (no key needed with Ollama):
+OLLAMA_HOST=http://localhost:11434
+
+# + Telegram:
+TELEGRAM_BOT_TOKEN=your_bot_token
+
+# + GitHub tools (60 req/hr free, 5000 req/hr with token):
+GITHUB_TOKEN=ghp_...
+
+# + Email:
+SMTP_USER=you@gmail.com
+SMTP_PASS=your_app_password  # from myaccount.google.com/apppasswords
+```
+
+---
+
+## 🛠️ Extend XClaw
+
+Adding a new tool takes 5 lines:
+
+```python
+# agents/integrations/my_tools.py
+async def my_custom_tool(query: str, limit: int = 10) -> str:
+    """One-line description the LLM uses to decide when to call this tool."""
+    # ... your implementation
+    return result
+```
+
+Register it in `agents/toolbox.py`:
+```python
+from agents.integrations import my_tools
+_integration_modules = [..., my_tools]
+```
+
+The LLM automatically discovers and uses your tool.
+
+---
+
+## 📊 Real Use Cases
+
+**Morning brief:**
+> "Schedule a daily 8am brief: check HN top 5, BTC price, and my pending tasks"
+
+**Research:**
+> "Find the top 5 Python async frameworks on GitHub, get their READMEs, and create a comparison report"
+
+**GitHub workflow:**
+> "List open issues on navigatorxm/OpenClaw and create an issue for the KB schema bug"
+
+**Market watch:**
+> "What's the current BTC price and top 5 crypto gainers today?"
+
+**Document Q&A:**
+> Upload a PDF → "Summarise the key points from my research paper"
+
+**Automation:**
+> "Every 2 hours, check /r/MachineLearning for posts over 100 upvotes and notify me"
+
+---
+
+## 🤝 Contributing
+
+1. Fork the repo
+2. Create a branch: `git checkout -b feature/my-tool`
+3. Add your tool in `agents/integrations/`
+4. Open a PR
+
+All contributions welcome — new tools, provider integrations, UI improvements.
+
+---
+
+## 📄 License
+
+MIT — use it, fork it, build on it.
+
+---
+
+<div align="center">
+
+**Built with ❤️ by [Navigator](https://github.com/navigatorxm)**
+
+*XClaw: because your AI assistant should actually do things.*
+
+</div>

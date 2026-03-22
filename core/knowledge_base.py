@@ -52,7 +52,8 @@ class KnowledgeBase:
     # ------------------------------------------------------------------
 
     def _ensure_schema(self) -> None:
-        self._memory._conn().executescript("""
+        conn = self._memory._conn()
+        conn.executescript("""
             CREATE TABLE IF NOT EXISTS kb_chunks (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 doc_id      TEXT    NOT NULL,
@@ -65,6 +66,7 @@ class KnowledgeBase:
             );
             CREATE INDEX IF NOT EXISTS idx_kb_source ON kb_chunks(source);
         """)
+        conn.commit()
 
     # ------------------------------------------------------------------
     # Ingestion
