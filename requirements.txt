@@ -1,18 +1,19 @@
 # XClaw Dependencies
 # ─────────────────────────────────────────────────────────────────────────────
-# Core (required)
+# Core
 pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# HTTP (real async client — replaces urllib throughout)
+httpx>=0.27.0
 
 # Web interface
 fastapi>=0.110.0
 uvicorn[standard]>=0.29.0
+websockets>=12.0
 
 # Telegram interface
 python-telegram-bot>=21.0
 
-# .env loading
-python-dotenv>=1.0.0
-
-# Optional: for richer web scraping in research agent
-# beautifulsoup4>=4.12.0
-# httpx>=0.27.0
+# HTML parsing (research agent)
+beautifulsoup4>=4.12.0

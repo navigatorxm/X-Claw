@@ -12,6 +12,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from agents.base import BaseAgent
+
 if TYPE_CHECKING:
     from brain.llm_router import LLMRouter
 
@@ -50,13 +52,14 @@ CONTEXT: {context}
 """
 
 
-class LeadsAgent:
+class LeadsAgent(BaseAgent):
     name = "leads"
+    timeout_seconds = 60.0
 
     def __init__(self, llm: "LLMRouter") -> None:
         self._llm = llm
 
-    async def run(self, action: str, params: dict, session_id: str) -> str:
+    async def _run(self, action: str, params: dict, session_id: str) -> str:
         a = action.lower()
 
         if "find" in a or "search" in a or "discover" in a:

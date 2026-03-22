@@ -6,8 +6,6 @@ Usage:
     python main.py --interface cli
     python main.py --interface telegram
     python main.py --interface web [--host 0.0.0.0] [--port 8000]
-
-Environment variables are loaded from .env automatically.
 """
 
 from __future__ import annotations
@@ -21,7 +19,6 @@ from pathlib import Path
 
 
 def _load_env() -> None:
-    """Load .env file into os.environ if python-dotenv is available."""
     env_file = Path(".env")
     if not env_file.exists():
         return
@@ -29,7 +26,6 @@ def _load_env() -> None:
         from dotenv import load_dotenv
         load_dotenv(env_file)
     except ImportError:
-        # Manual parse as fallback
         for line in env_file.read_text().splitlines():
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:
@@ -39,6 +35,7 @@ def _load_env() -> None:
 
 def _setup_logging() -> None:
     level = os.getenv("LOG_LEVEL", "INFO").upper()
+    Path("memory/logs").mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         level=getattr(logging, level, logging.INFO),
@@ -50,9 +47,9 @@ def _setup_logging() -> None:
 
 
 def _build_xclaw():
-    """Assemble the full XClaw stack and return (gateway, memory, router)."""
+    """Assemble the full XClaw stack. Returns (gateway, memory, router, llm, hub)."""
     from brain.llm_router import LLMRouter
-    from core.commander import Commander
+    from core.commander import Commander, ProgressHub
     from core.gateway import Gateway
     from core.memory import Memory
     from core.router import Router
@@ -64,27 +61,22 @@ def _build_xclaw():
     from agents.research import ResearchAgent
     from agents.tasks import TasksAgent
 
-    memory = Memory(
-        db_path="memory/tasks.db",
-        context_path="memory/context.md",
-    )
+    memory = Memory(db_path="memory/tasks.db", context_path="memory/context.md")
     llm = LLMRouter()
     router = Router()
+    hub = ProgressHub()
 
-    # Register all agents
-    router.register(ResearchAgent(llm))
+    router.register(ResearchAgent(llm, memory))
     router.register(ContentAgent(llm))
     router.register(LeadsAgent(llm))
     router.register(TasksAgent(llm, memory))
     router.register(MarketsAgent(llm, memory))
     router.register(CodeAgent(llm))
 
-    commander = Commander(llm=llm, router=router, memory=memory)
-
-    from core.gateway import Channel
+    commander = Commander(llm=llm, router=router, memory=memory, progress_hub=hub)
     gateway = Gateway(handler=commander.handle)
 
-    return gateway, memory, router
+    return gateway, memory, router, llm, hub
 
 
 def main() -> None:
@@ -97,9 +89,10 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
 
-    gateway, memory, router = _build_xclaw()
+    gateway, memory, router, llm, hub = _build_xclaw()
     log = logging.getLogger(__name__)
-    log.info("XClaw starting — interface: %s", args.interface)
+    log.info("XClaw v2 starting — interface: %s", args.interface)
+    log.info("Available LLM providers: %s", llm.available_providers() or ["none — check .env"])
 
     if args.interface == "cli":
         from interface.cli import run_cli
@@ -116,7 +109,7 @@ def main() -> None:
             print("uvicorn not installed. Run: pip install uvicorn")
             sys.exit(1)
         from interface.web.app import create_app
-        app = create_app(gateway, memory)
+        app = create_app(gateway, memory, hub=hub, llm_router=llm)
         uvicorn.run(app, host=args.host, port=args.port)
 
 

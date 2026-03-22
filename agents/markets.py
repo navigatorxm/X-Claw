@@ -13,6 +13,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from agents.base import BaseAgent
+
 if TYPE_CHECKING:
     from brain.llm_router import LLMRouter
     from core.memory import Memory
@@ -31,14 +33,15 @@ Highlight the top movers, major news, and overall sentiment today.
 """
 
 
-class MarketsAgent:
+class MarketsAgent(BaseAgent):
     name = "markets"
+    timeout_seconds = 30.0
 
     def __init__(self, llm: "LLMRouter", memory: "Memory") -> None:
         self._llm = llm
         self._memory = memory
 
-    async def run(self, action: str, params: dict, session_id: str) -> str:
+    async def _run(self, action: str, params: dict, session_id: str) -> str:
         a = action.lower()
 
         if "price" in a or "quote" in a:

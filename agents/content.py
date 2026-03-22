@@ -13,6 +13,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from agents.base import BaseAgent
+
 if TYPE_CHECKING:
     from brain.llm_router import LLMRouter
 
@@ -40,13 +42,14 @@ BRIEF: {brief}
 """
 
 
-class ContentAgent:
+class ContentAgent(BaseAgent):
     name = "content"
+    timeout_seconds = 60.0
 
     def __init__(self, llm: "LLMRouter") -> None:
         self._llm = llm
 
-    async def run(self, action: str, params: dict, session_id: str) -> str:
+    async def _run(self, action: str, params: dict, session_id: str) -> str:
         a = action.lower()
 
         if "write" in a or "create" in a or "draft" in a and "email" not in a:
