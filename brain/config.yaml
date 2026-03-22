@@ -1,0 +1,42 @@
+# XClaw Brain Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+# The LLM Router tries providers in order until one succeeds.
+# Set API keys in .env — never commit them here.
+
+primary:
+  provider: ovh               # OVH AI Endpoints (llama.cpp / Qwen 14B)
+  model: "Qwen2.5-14B-Instruct"
+  base_url: "${OVH_AI_ENDPOINT}"   # e.g. https://llama-cpp-xxx.endpoints.kepler.ai.cloud.ovh.net
+  api_key: "${OVH_API_KEY}"
+  timeout_seconds: 30
+  max_tokens: 2048
+  temperature: 0.3
+
+fallbacks:
+  - provider: groq
+    model: "llama-3.3-70b-versatile"
+    api_key: "${GROQ_API_KEY}"
+    timeout_seconds: 15
+    max_tokens: 2048
+    temperature: 0.3
+
+  - provider: gemini
+    model: "gemini-2.0-flash"
+    api_key: "${GEMINI_API_KEY}"
+    timeout_seconds: 20
+    max_tokens: 2048
+    temperature: 0.3
+
+  - provider: openai           # Last resort
+    model: "gpt-4o-mini"
+    api_key: "${OPENAI_API_KEY}"
+    timeout_seconds: 20
+    max_tokens: 2048
+    temperature: 0.3
+
+# System prompt injected into every request
+system_prompt: |
+  You are XClaw, a highly capable AI executive assistant working for Navigator.
+  You are precise, concise, and action-oriented.
+  When given a task, you produce structured, actionable output.
+  You never make things up — if you don't know, you say so.
