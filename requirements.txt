@@ -1,19 +1,23 @@
-# XClaw Dependencies
+# XClaw v3 Dependencies
 # ─────────────────────────────────────────────────────────────────────────────
 # Core
 pyyaml>=6.0
 python-dotenv>=1.0.0
 
-# HTTP (real async client — replaces urllib throughout)
+# HTTP (async client used throughout — LLM calls, web search, URL fetching)
 httpx>=0.27.0
 
 # Web interface
 fastapi>=0.110.0
 uvicorn[standard]>=0.29.0
 websockets>=12.0
+python-multipart>=0.0.9   # file uploads
 
 # Telegram interface
 python-telegram-bot>=21.0
 
-# HTML parsing (research agent)
+# HTML parsing (research agent, web tools)
 beautifulsoup4>=4.12.0
+
+# Optional: PDF ingestion for knowledge base
+# pypdf>=4.0.0
