@@ -18,6 +18,8 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from agents.base import BaseAgent
+
 if TYPE_CHECKING:
     from brain.llm_router import LLMRouter
 
@@ -65,13 +67,14 @@ CODE:
 _EXEC_TIMEOUT = 10
 
 
-class CodeAgent:
+class CodeAgent(BaseAgent):
     name = "code"
+    timeout_seconds = 90.0
 
     def __init__(self, llm: "LLMRouter") -> None:
         self._llm = llm
 
-    async def run(self, action: str, params: dict, session_id: str) -> str:
+    async def _run(self, action: str, params: dict, session_id: str) -> str:
         a = action.lower()
 
         if "generate" in a or "write" in a or "create" in a or "build" in a:
