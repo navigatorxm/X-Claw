@@ -42,6 +42,19 @@ fallbacks:
     supports_tool_calling: true
     supports_streaming: true
 
+  # DigitalOcean GenAI — serverless inference, pay-per-token, no GPU needed
+  # Create endpoint: https://cloud.digitalocean.com/gen-ai
+  # API is OpenAI-compatible: set DO_AI_ENDPOINT + DO_API_KEY
+  - provider: digitalocean
+    model: "${DO_AI_MODEL:-llama3-8b-instruct}"
+    base_url: "${DO_AI_ENDPOINT}"
+    api_key: "${DO_API_KEY}"
+    timeout_seconds: 30
+    max_tokens: 4096
+    temperature: 0.3
+    supports_tool_calling: false
+    supports_streaming: true
+
   # Ollama — runs 100% locally, zero cost, full privacy
   # Install: https://ollama.com  •  then: ollama pull llama3.2
   - provider: ollama
