@@ -1,4 +1,4 @@
-"""POST /execute — submit a trade for policy evaluation and execution."""
+"""POST /execute — submit a trade for policy + risk evaluation and execution."""
 from __future__ import annotations
 from decimal import Decimal
 from typing import Optional
@@ -6,13 +6,16 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from api.deps import get_execution_engine
+from api.deps import get_execution_engine, get_wallet_manager
+from auth.dependencies import get_current_agent, require_permission
+from auth.models import AgentIdentity, Permission
 from execution_engine.engine import (
     ExecutionDeniedError,
     ExecutionEngine,
     ExecutionError,
     ExecutionPendingError,
 )
+from wallet.manager import WalletManager
 
 router = APIRouter(prefix="/execute", tags=["execution"])
 
@@ -26,30 +29,26 @@ class TradeRequest(BaseModel):
     quote: str = Field(default="USDT")
     order_type: str = Field(default="market", pattern="^(market|limit)$")
     limit_price: Optional[Decimal] = Field(default=None, gt=0)
-    approval_request_id: Optional[str] = Field(
-        default=None,
-        description="Supply this to execute a pre-approved request",
-    )
-    daily_volume_usd: Decimal = Field(
-        default=Decimal("0"),
-        ge=0,
-        description="USD volume already traded today (for daily limit checks)",
-    )
+    approval_request_id: Optional[str] = Field(default=None)
+    daily_volume_usd: Decimal = Field(default=Decimal("0"), ge=0)
 
 
 @router.post("")
 async def execute_trade(
     body: TradeRequest,
     engine: ExecutionEngine = Depends(get_execution_engine),
+    caller: AgentIdentity = Depends(require_permission(Permission.EXECUTE)),
 ) -> dict:
     """
     Submit a trade order.
 
-    Outcomes:
-    - `status: executed`  — trade filled, result returned
-    - `status: pending`   — approval required; approval_request_id returned
-    - `status: denied`    — policy blocked the action
+    Non-admin agents may only submit trades for their own agent_id.
     """
+    if not caller.is_admin() and caller.agent_id != body.agent_id:
+        raise HTTPException(
+            status_code=403,
+            detail=f"You may only execute trades for your own agent_id ('{caller.agent_id}').",
+        )
     try:
         result = await engine.execute_trade(
             agent_id=body.agent_id,
@@ -66,15 +65,17 @@ async def execute_trade(
         return {"status": "executed", "result": result.to_dict()}
 
     except ExecutionDeniedError as exc:
-        raise HTTPException(status_code=403, detail={"status": "denied", "reason": exc.reason})
-
+        raise HTTPException(
+            status_code=403,
+            detail={"status": "denied", "reason": exc.reason, "source": exc.source},
+        )
     except ExecutionPendingError as exc:
         return {
             "status": "pending",
             "approval_request_id": exc.request_id,
             "message": exc.reason,
+            "source": exc.source,
         }
-
     except ExecutionError as exc:
         raise HTTPException(status_code=400, detail={"status": "error", "reason": str(exc)})
 
@@ -83,8 +84,21 @@ async def execute_trade(
 async def get_balance(
     wallet_id: str,
     engine: ExecutionEngine = Depends(get_execution_engine),
+    wallets: WalletManager = Depends(get_wallet_manager),
+    caller: AgentIdentity = Depends(require_permission(Permission.READ)),
 ) -> dict:
-    """Fetch live balance for a wallet."""
+    """
+    Fetch live balance for a wallet.
+    Non-admin agents may only query wallets that belong to them.
+    """
+    wallet = wallets.get(wallet_id)
+    if not wallet:
+        raise HTTPException(status_code=404, detail=f"Wallet '{wallet_id}' not found.")
+    if not caller.is_admin() and wallet.agent_id != caller.agent_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You may only query your own wallets.",
+        )
     try:
         result = await engine.get_balance(wallet_id)
         return result.to_dict()

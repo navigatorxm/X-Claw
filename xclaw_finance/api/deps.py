@@ -5,6 +5,7 @@ from functools import lru_cache
 from approval_system.queue import ApprovalQueue
 from approval_system.auto_approver import AutoApprover
 from audit_logger.logger import AuditLogger
+from auth.store import AgentStore
 from execution_engine.adapters.mock import MockExchangeAdapter
 from execution_engine.engine import ExecutionEngine
 from policy_engine.engine import PolicyEngine
@@ -15,6 +16,11 @@ from wallet.manager import WalletManager
 
 
 DB_PATH = "memory/finance.db"
+
+
+@lru_cache(maxsize=1)
+def get_agent_store() -> AgentStore:
+    return AgentStore(db_path=DB_PATH)
 
 
 @lru_cache(maxsize=1)
