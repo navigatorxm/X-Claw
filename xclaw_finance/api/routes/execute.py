@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from api.deps import get_execution_engine, get_wallet_manager
 from auth.dependencies import get_current_agent, require_permission
 from auth.models import AgentIdentity, Permission
+from wallet.manager import WalletManager as _WM  # re-import alias to avoid shadowing
 from execution_engine.engine import (
     ExecutionDeniedError,
     ExecutionEngine,
@@ -37,18 +38,32 @@ class TradeRequest(BaseModel):
 async def execute_trade(
     body: TradeRequest,
     engine: ExecutionEngine = Depends(get_execution_engine),
+    wallets: _WM = Depends(get_wallet_manager),
     caller: AgentIdentity = Depends(require_permission(Permission.EXECUTE)),
 ) -> dict:
     """
     Submit a trade order.
 
     Non-admin agents may only submit trades for their own agent_id.
+    Simulation agents (simulation=True) may only trade against simulation wallets.
     """
     if not caller.is_admin() and caller.agent_id != body.agent_id:
         raise HTTPException(
             status_code=403,
             detail=f"You may only execute trades for your own agent_id ('{caller.agent_id}').",
         )
+
+    # Simulation agents are restricted to simulation wallets
+    if caller.simulation:
+        wallet = wallets.get(body.wallet_id)
+        if wallet and wallet.exchange != "simulation":
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Simulation agents may only trade on simulation wallets "
+                    f"(wallet '{body.wallet_id}' uses exchange '{wallet.exchange}')."
+                ),
+            )
     try:
         result = await engine.execute_trade(
             agent_id=body.agent_id,

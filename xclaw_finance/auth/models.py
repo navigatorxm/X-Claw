@@ -46,6 +46,7 @@ class AgentIdentity:
     key_hash: str               # SHA-256(raw_api_key) — hex digest
     key_prefix: str             # first 8 chars of raw key for display / debugging
     active: bool = True
+    simulation: bool = False    # True → agent may only trade simulation wallets
     created_at: datetime = field(default_factory=datetime.utcnow)
     last_used_at: Optional[datetime] = None
 
@@ -62,6 +63,7 @@ class AgentIdentity:
             "permissions": sorted(p.value for p in self.permissions),
             "key_prefix": self.key_prefix,
             "active": self.active,
+            "simulation": self.simulation,
             "created_at": self.created_at.isoformat(),
             "last_used_at": self.last_used_at.isoformat() if self.last_used_at else None,
         }

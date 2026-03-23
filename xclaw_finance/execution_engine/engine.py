@@ -130,6 +130,7 @@ class ExecutionEngine:
             raise ExecutionError(f"Wallet '{wallet_id}' is not active ({wallet.status.value}).")
 
         adapter = self._get_adapter(wallet.exchange)
+        is_simulation = wallet.exchange == "simulation"
 
         # ── price fetch ───────────────────────────────────────────────
         symbol = f"{asset.upper()}{quote.upper()}"
@@ -163,7 +164,11 @@ class ExecutionEngine:
                     policy_decision=f"policy:deny",
                     approval_chain=None,
                     execution_result=None,
-                    metadata={"reason": policy_result.reason, "amount_usd": str(amount_usd)},
+                    metadata={
+                        "reason": policy_result.reason,
+                        "amount_usd": str(amount_usd),
+                        "simulation": is_simulation,
+                    },
                 )
                 raise ExecutionDeniedError(policy_result.reason, source="policy")
 
@@ -190,6 +195,7 @@ class ExecutionEngine:
                             "reason": risk_result.reason,
                             "guard": risk_result.guard.value if risk_result.guard else None,
                             "amount_usd": str(amount_usd),
+                            "simulation": is_simulation,
                         },
                     )
                     raise ExecutionDeniedError(risk_result.reason, source="risk")
@@ -210,6 +216,7 @@ class ExecutionEngine:
                             "limit_price": str(limit_price),
                             "escalated_by": "risk",
                             "guard": risk_result.guard.value if risk_result.guard else None,
+                            "simulation": is_simulation,
                         },
                     )
                     self._audit.log(
@@ -222,6 +229,7 @@ class ExecutionEngine:
                             "amount_usd": str(amount_usd),
                             "reason": risk_result.reason,
                             "guard": risk_result.guard.value if risk_result.guard else None,
+                            "simulation": is_simulation,
                         },
                     )
                     raise ExecutionPendingError(req.request_id, risk_result.reason, source="risk")
@@ -237,7 +245,11 @@ class ExecutionEngine:
                     exchange=wallet.exchange,
                     policy_id=policy_result.policy_id,
                     policy_reason=policy_result.reason,
-                    metadata={"order_type": order_type, "limit_price": str(limit_price)},
+                    metadata={
+                        "order_type": order_type,
+                        "limit_price": str(limit_price),
+                        "simulation": is_simulation,
+                    },
                 )
                 self._audit.log(
                     agent_id=agent_id,
@@ -245,7 +257,11 @@ class ExecutionEngine:
                     policy_decision="policy:require_approval",
                     approval_chain=req.request_id,
                     execution_result=None,
-                    metadata={"amount_usd": str(amount_usd), "reason": policy_result.reason},
+                    metadata={
+                        "amount_usd": str(amount_usd),
+                        "reason": policy_result.reason,
+                        "simulation": is_simulation,
+                    },
                 )
                 raise ExecutionPendingError(req.request_id, policy_result.reason, source="policy")
 
@@ -299,6 +315,7 @@ class ExecutionEngine:
                 "amount_usd": str(amount_usd),
                 "success": result.success,
                 "error": result.error,
+                "simulation": is_simulation,
             },
         )
         return result

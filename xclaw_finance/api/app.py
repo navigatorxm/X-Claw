@@ -14,7 +14,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routes import agents, approve, auth, execute, history, policies, risk
+from .routes import agents, approve, auth, execute, history, policies, risk, simulation
 from .deps import get_agent_store
 from auth.dependencies import _get_agent_store
 
@@ -22,9 +22,10 @@ app = FastAPI(
     title="XClaw Finance API",
     description=(
         "AI Agent Financial Execution Platform — "
-        "policy + risk-gated trading with agent-level access control and full audit trail."
+        "policy + risk-gated trading with agent-level access control, "
+        "full audit trail, and simulation mode for safe strategy testing."
     ),
-    version="1.2.0",
+    version="1.3.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -46,13 +47,14 @@ app.include_router(approve.router)
 app.include_router(history.router)
 app.include_router(policies.router)
 app.include_router(risk.router)
+app.include_router(simulation.router)
 
 
 @app.get("/", tags=["health"])
 async def health() -> dict:
     return {
         "service": "xclaw-finance",
-        "version": "1.2.0",
+        "version": "1.3.0",
         "status": "ok",
         "auth": "X-API-Key header required on all endpoints except POST /auth/agents (bootstrap)",
         "endpoints": {
@@ -71,5 +73,11 @@ async def health() -> dict:
             "history":    ["GET /history (read)", "GET /history/{id} (read)"],
             "policies":   ["GET /policies (read)", "POST /policies (admin)", "DELETE /policies/{id} (admin)"],
             "risk":       ["POST /risk/config (admin)", "GET /risk/config/{id} (read)", "GET /risk/status/{id} (read)"],
+            "simulation": [
+                "POST /simulation/wallets (execute)",
+                "GET  /simulation/wallets/{id} (read)",
+                "POST /simulation/wallets/{id}/reset (execute)",
+                "GET  /simulation/portfolio/{agent_id} (read)",
+            ],
         },
     }

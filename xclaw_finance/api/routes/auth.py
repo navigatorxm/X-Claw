@@ -23,6 +23,7 @@ class RegisterAgentRequest(BaseModel):
     agent_id: str
     role: str = "trader"                    # admin | trader | approver | readonly
     custom_permissions: Optional[list[str]] = None
+    simulation: bool = False                # True → agent may only use simulation wallets
 
 
 class UpdateRoleRequest(BaseModel):
@@ -83,7 +84,7 @@ async def _do_register(body: RegisterAgentRequest, store: AgentStore) -> dict:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
     try:
-        identity, raw_key = store.register(body.agent_id, role, custom_perms)
+        identity, raw_key = store.register(body.agent_id, role, custom_perms, body.simulation)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
 

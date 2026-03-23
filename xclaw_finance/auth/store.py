@@ -61,6 +61,7 @@ class AgentStore:
                     key_hash        TEXT NOT NULL UNIQUE,
                     key_prefix      TEXT NOT NULL,
                     active          INTEGER NOT NULL DEFAULT 1,
+                    simulation      INTEGER NOT NULL DEFAULT 0,
                     created_at      TEXT NOT NULL,
                     last_used_at    TEXT
                 )
@@ -68,6 +69,14 @@ class AgentStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_identity_hash ON agent_identities(key_hash)"
             )
+            # Migration: add simulation column to existing databases
+            try:
+                conn.execute(
+                    "ALTER TABLE agent_identities "
+                    "ADD COLUMN simulation INTEGER NOT NULL DEFAULT 0"
+                )
+            except sqlite3.OperationalError:
+                pass  # column already present
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self._db))
@@ -80,6 +89,7 @@ class AgentStore:
         agent_id: str,
         role: Role,
         custom_permissions: Optional[frozenset[Permission]] = None,
+        simulation: bool = False,
     ) -> tuple[AgentIdentity, str]:
         """
         Create a new agent identity.
@@ -103,19 +113,22 @@ class AgentStore:
             permissions=perms,
             key_hash=key_hash,
             key_prefix=raw_key[:12],
+            simulation=simulation,
             created_at=now,
         )
         with self._connect() as conn:
             conn.execute(
                 """INSERT INTO agent_identities
-                   (agent_id, role, permissions, key_hash, key_prefix, active, created_at)
-                   VALUES (?,?,?,?,?,1,?)""",
+                   (agent_id, role, permissions, key_hash, key_prefix,
+                    active, simulation, created_at)
+                   VALUES (?,?,?,?,?,1,?,?)""",
                 (
                     agent_id,
                     role.value,
                     json.dumps(sorted(p.value for p in perms)),
                     key_hash,
                     identity.key_prefix,
+                    1 if simulation else 0,
                     now.isoformat(),
                 ),
             )
@@ -228,6 +241,11 @@ class AgentStore:
     # ------------------------------------------------------------ deserialise
     def _row_to_identity(self, row: sqlite3.Row) -> AgentIdentity:
         perms = frozenset(Permission(p) for p in json.loads(row["permissions"]))
+        # Guard against rows that predate the simulation column
+        try:
+            simulation = bool(row["simulation"])
+        except (IndexError, KeyError):
+            simulation = False
         return AgentIdentity(
             agent_id=row["agent_id"],
             role=Role(row["role"]),
@@ -235,6 +253,7 @@ class AgentStore:
             key_hash=row["key_hash"],
             key_prefix=row["key_prefix"],
             active=bool(row["active"]),
+            simulation=simulation,
             created_at=datetime.fromisoformat(row["created_at"]),
             last_used_at=(
                 datetime.fromisoformat(row["last_used_at"])

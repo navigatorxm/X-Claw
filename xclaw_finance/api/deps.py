@@ -8,6 +8,7 @@ from audit_logger.logger import AuditLogger
 from auth.store import AgentStore
 from execution_engine.adapters.mock import MockExchangeAdapter
 from execution_engine.engine import ExecutionEngine
+from simulation.adapter import SimulationAdapter
 from policy_engine.engine import PolicyEngine
 from policy_engine.store import PolicyStore
 from risk_engine.exposure_tracker import ExposureTracker
@@ -67,6 +68,11 @@ def get_risk_engine() -> RiskEngine:
 
 
 @lru_cache(maxsize=1)
+def get_sim_adapter() -> SimulationAdapter:
+    return SimulationAdapter(db_path=DB_PATH)
+
+
+@lru_cache(maxsize=1)
 def get_execution_engine() -> ExecutionEngine:
     engine = ExecutionEngine(
         wallet_manager=get_wallet_manager(),
@@ -76,6 +82,7 @@ def get_execution_engine() -> ExecutionEngine:
         risk_engine=get_risk_engine(),
     )
     engine.register_adapter(MockExchangeAdapter())
+    engine.register_adapter(get_sim_adapter())
     return engine
 
 
