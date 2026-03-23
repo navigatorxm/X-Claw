@@ -116,6 +116,7 @@ class ExecutionEngine:
         limit_price: Optional[Decimal] = None,
         approval_request_id: Optional[str] = None,
         daily_volume_usd: Decimal = Decimal("0"),
+        request_id: Optional[str] = None,
     ) -> ExecutionResult:
         """
         Execute a buy or sell order.

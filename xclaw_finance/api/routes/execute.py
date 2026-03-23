@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from api.deps import get_execution_engine, get_wallet_manager
@@ -17,6 +17,9 @@ from execution_engine.engine import (
     ExecutionPendingError,
 )
 from wallet.manager import WalletManager
+from logging import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/execute", tags=["execution"])
 
@@ -37,6 +40,7 @@ class TradeRequest(BaseModel):
 @router.post("")
 async def execute_trade(
     body: TradeRequest,
+    request: Request,
     engine: ExecutionEngine = Depends(get_execution_engine),
     wallets: _WM = Depends(get_wallet_manager),
     caller: AgentIdentity = Depends(require_permission(Permission.EXECUTE)),
@@ -47,7 +51,16 @@ async def execute_trade(
     Non-admin agents may only submit trades for their own agent_id.
     Simulation agents (simulation=True) may only trade against simulation wallets.
     """
+    request_id = getattr(request.state, "request_id", "unknown")
+
     if not caller.is_admin() and caller.agent_id != body.agent_id:
+        logger.warn(
+            "Trade authorization failed",
+            request_id=request_id,
+            agent_id=body.agent_id,
+            action="execute_trade",
+            error="agent_id_mismatch",
+        )
         raise HTTPException(
             status_code=403,
             detail=f"You may only execute trades for your own agent_id ('{caller.agent_id}').",
@@ -57,6 +70,14 @@ async def execute_trade(
     if caller.simulation:
         wallet = wallets.get(body.wallet_id)
         if wallet and wallet.exchange != "simulation":
+            logger.warn(
+                "Simulation agent trading on non-simulation wallet",
+                request_id=request_id,
+                agent_id=body.agent_id,
+                action="execute_trade",
+                wallet_id=body.wallet_id,
+                error="simulation_restriction",
+            )
             raise HTTPException(
                 status_code=403,
                 detail=(
@@ -64,7 +85,18 @@ async def execute_trade(
                     f"(wallet '{body.wallet_id}' uses exchange '{wallet.exchange}')."
                 ),
             )
+
     try:
+        logger.debug(
+            "Starting trade execution",
+            request_id=request_id,
+            agent_id=body.agent_id,
+            action="execute_trade",
+            side=body.side,
+            asset=body.asset,
+            amount=str(body.amount),
+        )
+
         result = await engine.execute_trade(
             agent_id=body.agent_id,
             wallet_id=body.wallet_id,
@@ -76,15 +108,43 @@ async def execute_trade(
             limit_price=body.limit_price,
             approval_request_id=body.approval_request_id,
             daily_volume_usd=body.daily_volume_usd,
+            request_id=request_id,
+        )
+
+        logger.info(
+            "Trade executed successfully",
+            request_id=request_id,
+            agent_id=body.agent_id,
+            action="execute_trade",
+            status="executed",
+            order_id=result.order.order_id,
         )
         return {"status": "executed", "result": result.to_dict()}
 
     except ExecutionDeniedError as exc:
+        logger.info(
+            "Trade denied",
+            request_id=request_id,
+            agent_id=body.agent_id,
+            action="execute_trade",
+            status="denied",
+            source=exc.source,
+            reason=exc.reason,
+        )
         raise HTTPException(
             status_code=403,
             detail={"status": "denied", "reason": exc.reason, "source": exc.source},
         )
     except ExecutionPendingError as exc:
+        logger.info(
+            "Trade pending approval",
+            request_id=request_id,
+            agent_id=body.agent_id,
+            action="execute_trade",
+            status="pending",
+            approval_request_id=exc.request_id,
+            source=exc.source,
+        )
         return {
             "status": "pending",
             "approval_request_id": exc.request_id,
@@ -92,6 +152,15 @@ async def execute_trade(
             "source": exc.source,
         }
     except ExecutionError as exc:
+        logger.error(
+            "Trade execution error",
+            request_id=request_id,
+            agent_id=body.agent_id,
+            action="execute_trade",
+            status="error",
+            error=str(exc),
+            exception=exc,
+        )
         raise HTTPException(status_code=400, detail={"status": "error", "reason": str(exc)})
 
 

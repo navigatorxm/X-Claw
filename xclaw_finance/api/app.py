@@ -17,6 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from .routes import agents, approve, auth, execute, history, policies, risk, simulation
 from .deps import get_agent_store
 from auth.dependencies import _get_agent_store
+from logging import setup_logging, LogLevel
+from logging.middleware import RequestLoggingMiddleware
 
 app = FastAPI(
     title="XClaw Finance API",
@@ -30,6 +32,11 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+# Setup structured logging
+setup_logging(level=LogLevel.INFO)
+
+# Add middleware (RequestLoggingMiddleware before CORS for correct order)
+app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
