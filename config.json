@@ -1,0 +1,24 @@
+{
+  "_comment": "X-Claw Stress Test Configuration — copy and fill in your values",
+
+  "api_url": "http://localhost:8000",
+  "api_key": "xclaw_your_api_key_here",
+  "agent_id": "stress-test-agent",
+  "wallet_id": "w_your_wallet_id_here",
+
+  "total_requests": 200,
+  "concurrency": 20,
+
+  "endpoints": ["/execute", "/approve"],
+
+  "assets": ["BTC", "ETH", "SOL", "BNB", "DOGE"],
+  "amount_min": 0.001,
+  "amount_max": 0.5,
+
+  "jitter_min_ms": 0,
+  "jitter_max_ms": 150,
+
+  "timeout_seconds": 30.0,
+
+  "log_file": "stress_test.log"
+}
