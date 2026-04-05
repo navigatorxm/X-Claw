@@ -2,6 +2,8 @@
 from __future__ import annotations
 from functools import lru_cache
 
+from analytics.metrics_aggregator import MetricsAggregator
+from analytics.pnl_tracker import PnLTracker
 from approval_system.queue import ApprovalQueue
 from approval_system.auto_approver import AutoApprover
 from audit_logger.logger import AuditLogger
@@ -84,6 +86,16 @@ def get_execution_engine() -> ExecutionEngine:
     engine.register_adapter(MockExchangeAdapter())
     engine.register_adapter(get_sim_adapter())
     return engine
+
+
+@lru_cache(maxsize=1)
+def get_pnl_tracker() -> PnLTracker:
+    return PnLTracker(db_path=DB_PATH)
+
+
+@lru_cache(maxsize=1)
+def get_metrics_aggregator() -> MetricsAggregator:
+    return MetricsAggregator(db_path=DB_PATH)
 
 
 @lru_cache(maxsize=1)
