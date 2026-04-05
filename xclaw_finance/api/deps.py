@@ -1,0 +1,106 @@
+"""FastAPI dependency injection — builds and caches the platform components."""
+from __future__ import annotations
+from functools import lru_cache
+
+from analytics.metrics_aggregator import MetricsAggregator
+from analytics.pnl_tracker import PnLTracker
+from approval_system.queue import ApprovalQueue
+from approval_system.auto_approver import AutoApprover
+from audit_logger.logger import AuditLogger
+from auth.store import AgentStore
+from execution_engine.adapters.mock import MockExchangeAdapter
+from execution_engine.engine import ExecutionEngine
+from simulation.adapter import SimulationAdapter
+from policy_engine.engine import PolicyEngine
+from policy_engine.store import PolicyStore
+from risk_engine.exposure_tracker import ExposureTracker
+from risk_engine.risk_engine import RiskConfigStore, RiskEngine
+from wallet.manager import WalletManager
+
+
+DB_PATH = "memory/finance.db"
+
+
+@lru_cache(maxsize=1)
+def get_agent_store() -> AgentStore:
+    return AgentStore(db_path=DB_PATH)
+
+
+@lru_cache(maxsize=1)
+def get_wallet_manager() -> WalletManager:
+    return WalletManager(db_path=DB_PATH)
+
+
+@lru_cache(maxsize=1)
+def get_policy_store() -> PolicyStore:
+    return PolicyStore(db_path=DB_PATH)
+
+
+@lru_cache(maxsize=1)
+def get_policy_engine() -> PolicyEngine:
+    return PolicyEngine(store=get_policy_store())
+
+
+@lru_cache(maxsize=1)
+def get_approval_queue() -> ApprovalQueue:
+    return ApprovalQueue(db_path=DB_PATH)
+
+
+@lru_cache(maxsize=1)
+def get_audit_logger() -> AuditLogger:
+    return AuditLogger(db_path=DB_PATH)
+
+
+@lru_cache(maxsize=1)
+def get_exposure_tracker() -> ExposureTracker:
+    return ExposureTracker(db_path=DB_PATH)
+
+
+@lru_cache(maxsize=1)
+def get_risk_config_store() -> RiskConfigStore:
+    return RiskConfigStore(db_path=DB_PATH)
+
+
+@lru_cache(maxsize=1)
+def get_risk_engine() -> RiskEngine:
+    return RiskEngine(
+        config_store=get_risk_config_store(),
+        tracker=get_exposure_tracker(),
+    )
+
+
+@lru_cache(maxsize=1)
+def get_sim_adapter() -> SimulationAdapter:
+    return SimulationAdapter(db_path=DB_PATH)
+
+
+@lru_cache(maxsize=1)
+def get_execution_engine() -> ExecutionEngine:
+    engine = ExecutionEngine(
+        wallet_manager=get_wallet_manager(),
+        policy_engine=get_policy_engine(),
+        approval_queue=get_approval_queue(),
+        audit_logger=get_audit_logger(),
+        risk_engine=get_risk_engine(),
+    )
+    engine.register_adapter(MockExchangeAdapter())
+    engine.register_adapter(get_sim_adapter())
+    return engine
+
+
+@lru_cache(maxsize=1)
+def get_pnl_tracker() -> PnLTracker:
+    return PnLTracker(db_path=DB_PATH)
+
+
+@lru_cache(maxsize=1)
+def get_metrics_aggregator() -> MetricsAggregator:
+    return MetricsAggregator(db_path=DB_PATH)
+
+
+@lru_cache(maxsize=1)
+def get_auto_approver() -> AutoApprover:
+    return AutoApprover(
+        queue=get_approval_queue(),
+        policy_engine=get_policy_engine(),
+    )
