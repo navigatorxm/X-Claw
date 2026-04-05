@@ -1,0 +1,54 @@
+{
+  "_comment": "X-Claw Stress Test Configuration — edit before running",
+
+  "base_url": "http://localhost:8000",
+
+  "api_key": "xclaw_stress_tester_REPLACE_WITH_REAL_KEY",
+
+  "agent_id": "stress_tester",
+
+  "wallet_id": "REPLACE_WITH_WALLET_ID",
+
+  "total_requests": 1000,
+
+  "concurrency": 50,
+
+  "test_params": {
+    "_comment_endpoints": "Ratios of /execute vs /approve requests (must sum to 1.0)",
+    "execute_ratio": 0.7,
+    "approve_ratio": 0.3,
+
+    "_comment_assets": "Assets to trade — weights must align with assets array length",
+    "assets": ["BTC", "ETH", "SOL"],
+    "asset_weights": [0.5, 0.3, 0.2],
+
+    "_comment_amounts": "Four size tiers [min, max]; probabilities must sum to 1.0",
+    "amount_ranges": {
+      "small":   [0.001, 0.01],
+      "medium":  [0.01,  0.1 ],
+      "large":   [0.1,   1.0 ],
+      "extreme": [1.0,  10.0 ]
+    },
+    "amount_probabilities": {
+      "small":   0.40,
+      "medium":  0.40,
+      "large":   0.15,
+      "extreme": 0.05
+    },
+
+    "_comment_timing": "Random delay between requests per worker (ms). 0 = no jitter.",
+    "timing_jitter_ms": 500,
+
+    "_comment_http": "Per-request timeout (seconds) and max retries for transient 5xx errors",
+    "request_timeout_s": 30,
+    "max_retries": 3,
+
+    "_comment_approve": "Fraction of /approve decisions that will be 'approve' (rest 'reject')",
+    "approval_approve_ratio": 0.8,
+
+    "_comment_output": "Log every failure to a .jsonl file alongside the JSON report",
+    "log_failures": true,
+    "failure_log_file": "stress_test_failures.jsonl",
+    "report_file": "stress_test_report.json"
+  }
+}
